@@ -1,0 +1,15 @@
+[package]
+name        = "aio-rs"
+version     = "0.1.0"
+edition     = "2021"
+authors     = ["chuck@arda"]
+description = "An oxidized wrapper around aio-sys to provide some convience and QoL features."
+keywords    = ["IO", "Asynchronous", "libaio", "aio"]
+maintenance = { status = "as-is" }
+
+[dependencies]
+libc = "0.2.0"
+tempfile = "3"
+aio-sys = { path = "../aio-sys" }
+
+[profile.release]
