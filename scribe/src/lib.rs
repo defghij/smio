@@ -1,3 +1,2 @@
-extern crate libc;
-
-mod scribe;
+//mod scribe;
+pub mod page;
