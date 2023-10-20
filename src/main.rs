@@ -1,4 +1,3 @@
-use scribe::scribe::create;
 use std::io::Result;
 use clap::{
     ArgMatches,
@@ -25,7 +24,9 @@ fn cli_arguments() -> Command {
                 .default_missing_value("info")
                 .help("Verbosity level of the application")
          )
-        // FILE LAYOUT ARGUMENTS
+
+        // FILE LAYOUT
+        // Size, layout, count
         .arg(
             Arg::new("page_size")
                 .short('p')
@@ -55,7 +56,7 @@ fn cli_arguments() -> Command {
                 .help("String prefix for generated books (files).")
         )
 
-        // DIRECTORY LAYOUT ARGUMENTS
+        // DIRECTORY LAYOUT
         //// Specify prefix and count
         .arg(
             Arg::new("directory-count")
