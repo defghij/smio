@@ -3,32 +3,47 @@ use rand_xoshiro::Xoroshiro128PlusPlus;
 use bitcode::{Encode, Decode};
 use std::fmt;
 
+
+//TODO
+//-----------------------
+// 1. Need to be able to write pages an array in memory? Maybe the stack is sufficient?
+
 #[repr(C)]
 #[derive(Encode, Decode, Debug, Copy, Clone)]
 pub struct Page<const N: usize> {
+    preseed: u32,
     file: u32,
     page: u64,
-    preseed: u32,
     data: [u64; N]
 } impl<const N: usize> Page<N> {
     #[allow(dead_code)]
-    pub fn new(file: u32, page: u64, preseed: u32) -> Page<N> {
+    pub fn new(preseed: u32, file: u32, page: u64) -> Page<N> {
         let data: [u64; N] = Page::generate_data(Page::<N>::assemble_seed(file, page, preseed));
         Page::<N> {
             file,
-            page,
             preseed,
+            page,
             data
         }
     }
-    
-    #[allow(dead_code)]
-    pub fn mutate_page(&mut self, new_preseed: u32) {
-        self.preseed = new_preseed;
-        let data: [u64; N] = Page::generate_data(Page::<1>::assemble_seed(self.file, self.page, self.preseed));
-        self.data = data;
-    }
 
+    pub fn to_byte_slice<'a>(self) -> &'a [u8] {
+        let ptr =  &self as *const Page<N> as *const u8;
+        unsafe {
+            std::slice::from_raw_parts(ptr, std::mem::size_of::<Page<N>>())
+        }
+    }
+    pub fn from_byte_slice<'a>(slice: &[u8]) -> Option<&Page<N>> {
+        if slice.len() != std::mem::size_of::<Page<N>>() {
+            return None;
+        }
+        let ptr = slice.as_ptr() as *const Page<N>;
+        Some(unsafe {&*ptr })
+    }
+    
+
+    ////////////////////////////////////////////////////
+    //// Data Functions
     #[allow(dead_code)]
     fn assemble_seed(file: u32, page: u64, preseed: u32) -> u64 {
         let seed_page: u64 = page << 32;   
@@ -41,7 +56,6 @@ pub struct Page<const N: usize> {
     
     fn generate_data(seed: u64) -> [u64; N] {
         let mut rng = Xoroshiro128PlusPlus::seed_from_u64(seed);
-        
         let data: [u64; N] = {
             let mut temp = [0; N];
             for elem in temp.iter_mut() {
@@ -50,6 +64,27 @@ pub struct Page<const N: usize> {
             temp
         };
         data
+    }
+
+    ////////////////////////////////////////////////////
+    //// Mutatate Functions
+    #[allow(dead_code)]
+    pub fn mutate_seed(&mut self, preseed: u32) {
+        self.preseed = preseed;
+        let data: [u64; N] = Page::generate_data(Page::<0>::assemble_seed(self.file, self.page, self.preseed));
+        self.data = data;
+    }
+    #[allow(dead_code)]
+    pub fn mutate_file(&mut self, file: u32) {
+        self.file = file;
+        let data: [u64; N] = Page::generate_data(Page::<1>::assemble_seed(self.file, self.page, self.preseed));
+        self.data = data;
+    }
+    #[allow(dead_code)]
+    pub fn mutate_page(&mut self, page: u64) {
+        self.page = page;
+        let data: [u64; N] = Page::generate_data(Page::<1>::assemble_seed(self.file, self.page, self.preseed));
+        self.data = data;
     }
 }
 impl<const N:usize> fmt::Display for Page<N> {
@@ -70,45 +105,46 @@ impl<const N:usize> fmt::Display for Page<N> {
 
 #[test]
 fn serialize_page() {
-    let f: u32 = u32::MAX - 1;
-    let p: u64 = u64::MAX;
-    let prsd: u32 = 0xdead;
+    let flat_tv  = [
+        0xC0, 0xC1, 0xC2, 0xC3, // preseed
+        0xB0, 0xB1, 0xB2, 0xB3, // file
+        0xA0, 0xA1, 0xA2, 0xA3, // page
+        0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
+        0xAC, 0x7E, 0x13,  0xB5, // data segment...
+        0xC5, 0x33, 0x89, 0x4E  //   data cont'd
+    ];
+    let prsd: u32 = 0xC3C2C1C0;
+    let f: u32 = 0xB3B2B1B0;
+    let p: u64 = 0xA7A6A5A4A3A2A1A0;
     const DATA_SIZE: usize = 1;
 
-    let page: Page<DATA_SIZE> = Page::new(f, p, prsd);
-    let flat: Vec<u8> = bitcode::encode(&page).unwrap();
-    
-    assert!([u8::MAX - 1, u8::MAX, u8::MAX, u8::MAX] == flat[0..4]);
-    assert!([u8::MAX; 8] == flat[4..12]);
-    assert!([0xad, 0xde, 0,0] == flat[12..16]);
+    let page: Page<DATA_SIZE> = Page::new(prsd, f, p);
+    let flat: &[u8] = page.to_byte_slice();
 
-    let seed: u64 = Page::<DATA_SIZE>::assemble_seed(f, p, prsd);
-    let mut rng = Xoroshiro128PlusPlus::seed_from_u64(seed);
-   
-    let data: u64 = rng.next_u64();
-    let data: [u8; 8] = data.to_le_bytes();
-    assert!(data == flat[16..]);
+    // Test slices
+    assert!(flat_tv[0..4]  == flat[0..4]);
+    assert!(flat_tv[4..8]  == flat[4..8]);
+    assert!(flat_tv[8..16] == flat[8..16]);
+    assert!(flat_tv[16..]  == flat[16..]);
+
 }
 
 #[test]
 fn deserialize_page() {
-    let flat  = [
-        0xfe, 0xff, 0xff, 0xff, // u32::MAX - 1
-        0xff, 0xff, 0xff, 0xff, // u64::MAX
-        0xff, 0xff, 0xff, 0xff, //   cont'd
-        0xad, 0xde, 0x0,  0x0,  // 0xdead
-        0x16, 0x66, 0x4,  0x67, // data segment...
-        0x5d, 0x93, 0xbf, 0xf2  //   cont'd
+    let flat_tv  = [
+        0xC0, 0xC1, 0xC2, 0xC3, // preseed
+        0xB0, 0xB1, 0xB2, 0xB3, // file
+        0xA0, 0xA1, 0xA2, 0xA3, // page
+        0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
+        0xAC, 0x7E, 0x13,  0xB5, // data segment...
+        0xC5, 0x33, 0x89, 0x4E  //   data cont'd
     ];
+
     const DATA_SIZE: usize = 1;
+    let page: &Page<DATA_SIZE> = Page::<DATA_SIZE>::from_byte_slice(&flat_tv).expect("Could not deserialize!");
 
-    let page: Page<DATA_SIZE> = bitcode::decode(&flat).unwrap();
-    let file_id = page.file;
-    let page_id = page.page;
-    let preseed = page.preseed;
-    let data: [u64; DATA_SIZE] = page.data;
-
-    let seed: u64 = Page::<DATA_SIZE>::assemble_seed(file_id, page_id, preseed);
-    let mut rng = Xoroshiro128PlusPlus::seed_from_u64(seed);
-    assert!(data[0] == rng.next_u64());
+    assert!(page.preseed == 0xC3C2C1C0);
+    assert!(page.file    == 0xB3B2B1B0);
+    assert!(page.page    == 0xA7A6A5A4A3A2A1A0);
+    assert!(page.data[0] == 0x4E8933C5B5137EAC);
 }

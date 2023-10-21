@@ -17,7 +17,8 @@ pub enum Verbosity {
 
 use std::{
     io::Result,
-    fs::File
+    fs::File,
+    os::fd::AsRawFd
 };
 use scribe::{
     page::Page,
@@ -29,8 +30,11 @@ use scribe::{
     }
 };
 use aio_rs::aio::{ 
+    IoCmd,
     AioContext,
-    aio_setup
+    AioRequest,
+    aio_setup,
+    aio_submit
 };
 
 
@@ -43,9 +47,9 @@ fn main() -> Result<()> {
     let path_prefix: String = String::from("/home/chuck/programming/testing");
     let directory_prefix: String = String::from("shelf");
     let file_prefix: String = String::from("book");
-    let directory_count: u32 = 8;
+    let directory_count: u32 = 11;
     let file_count: u32 = 120;
-    let preseed: u32 = 0xdeadbeef;
+    //let preseed: u32 = 0xdeadbeef;
 
     let bookcase: BookCase = BookCase::new(&path_prefix,
                                            &directory_prefix,
@@ -55,7 +59,7 @@ fn main() -> Result<()> {
                                            PAGE_SIZE,
                                            PAGE_COUNT as u64);
     println!("About to build\n{bookcase}");
-    bookcase.build()?;
+    bookcase.construct()?;
     println!("finished");
 
 
@@ -94,14 +98,32 @@ fn main() -> Result<()> {
     /**************************
      * Populate Books         *
      **************************/
-    for book in 0..bookcase.book_count() {
-        let file: File = bookcase.open_book(book, false, true);
-        for page in 0..(bookcase.page_count() as usize) {
-            let page: Page<DATA_SIZE> = Page::new(book as u32, page as u64, preseed);
+    for _bid in 0..bookcase.book_count() {
+            /*
+        let file: File = bookcase.open_book(bid, false, true);
+        let file_descriptor = file.as_raw_fd();
+        for pid in 0..(bookcase.page_count() as usize) {
+            let page: Page<DATA_SIZE> = Page::new(preseed, bid as u32, pid as u64);
+            let mut source_buffer: [u8] = page.to_byte_slice();
+            let file_offset: isize = (PAGE_SIZE * pid) as isize;
+            let request_tag: u64 = ((pid << 16) | bid as usize) as u64;
+            let request_code: IoCmd = IoCmd::Pwrite;
+
+            let request = AioRequest::new()
+                .add_fd(file_descriptor)
+                .add_offset(file_offset)
+                .add_tag(request_tag)
+                .add_opcode(request_code)
+                .add_buffer(&mut source_buffer);
+
+            let mut requests: [AioRequest; 1] = [request];
+            //let ret = aio_submit(ctx, &mut requests);
+            //if ret.is_err() { panic!("Failed to submit request for page {} in book {}!", pid, bid); }
         }
+            */
     }
 
-    bookcase.demolish()?; // Revert directory structure. Shouldnt be used in practice.
+    //bookcase.demolish()?; // Revert directory structure. Shouldnt be used in practice.
 
     Ok(())
 }

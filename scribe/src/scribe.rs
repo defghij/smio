@@ -1,23 +1,27 @@
-use std::fs::{
-    File,
-    OpenOptions
-};
 //use std::os::unix::prelude::OpenOptionsExt;
-use std::sync::atomic::AtomicUsize;
-use std::{path::Path, fs};
+//use std::sync::atomic::AtomicUsize;
+use std::{
+    path::Path,
+    fs::{
+        OpenOptions,
+        File,
+        remove_file,
+//        remove_dir,
+        remove_dir_all,
+        create_dir_all,
+    }
+};
 use std::io::{
     Result,
-    Write
+//    Write
 };
 use std::fmt;
-use crate::page::Page;
 
 
-const MAX_DIRECTORIES: usize = 10000;
 pub const PAGE_SIZE: usize = 4096; 
 pub const METADATA_SIZE: usize = 16;
 pub const DATA_SIZE: usize     = PAGE_SIZE - METADATA_SIZE;
-const PAGE_SIZE_MIN:   usize = 4096;
+//const PAGE_SIZE_MIN:   usize = 4096;
 const CHAPTER_SIZE:    usize = 512;
 pub const PAGE_COUNT: u64 = 512;
 //const O_DIRECT: i32 = 0x4000;
@@ -73,7 +77,7 @@ pub struct BookCase<'a> {
         }
     }
 
-    pub fn build(self) -> Result<()> {
+    pub fn construct(self) -> Result<()> {
         for fid in 0..(self.file_count as usize) {
             self.create_book(fid as u32)?;
         }
@@ -81,8 +85,13 @@ pub struct BookCase<'a> {
     }
 
     pub fn demolish(self) -> Result<()> {
-        for fid in 0..(self.file_count as usize) {
-            self.destroy_book(fid as u32)?;
+        for id in 0..(self.directory_count as usize) {
+            let dpath: String = format!("{}/{}{:0width$}",
+                self.path_prefix,
+                self.directory_prefix,
+                id,
+                width = (self.directory_count.ilog10() + 1) as usize );
+            remove_dir_all(dpath)?;
         }
         Ok(())
     }
@@ -93,7 +102,7 @@ pub struct BookCase<'a> {
         let path: &Path  = Path::new(&path);
 
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            create_dir_all(parent)?;
         }
         let file: File = File::create(path)?;
 
@@ -103,12 +112,14 @@ pub struct BookCase<'a> {
         Ok(())
     }
 
-    fn destroy_book(self, file_id: u32) -> Result<()> {
-        unimplemented!("Not yet!");
+    #[allow(dead_code)]
+    fn destroy_book(self, id: u32) -> Result<()> {
+        let fpath: String = self.book_location(id);
+        remove_file(&fpath)
     }
 
-    pub fn open_book(self, file_id: u32, read: bool, write: bool) -> File {
-        let fpath: String = self.book_location(file_id);
+    pub fn open_book(self, id: u32, read: bool, write: bool) -> File {
+        let fpath: String = self.book_location(id);
         OpenOptions::new()
                     .write(write)
                     .read(read)
@@ -121,14 +132,16 @@ pub struct BookCase<'a> {
     ////////////////////////////////////////////////////
     //// Utility Functions
     #[inline(always)]
-    pub fn book_location(self, file_id: u32) -> String {
-        format!("{}/{}{}/{}{:0width$}",
+    pub fn book_location(self, id: u32) -> String {
+        assert!(id < self.file_count);
+        format!("{}/{}{:0dwidth$}/{}{:0fwidth$}",
             self.path_prefix,
             self.directory_prefix,
-            file_id.rem_euclid(self.directory_count),
+            id.rem_euclid(self.directory_count),
             self.file_prefix,
-            file_id,
-            width = (self.file_count.ilog10() + 1) as usize )
+            id,
+            dwidth = (self.directory_count.ilog10() + 1) as usize,
+            fwidth = (self.file_count.ilog10() + 1) as usize )
     }
 
     #[inline(always)]
@@ -145,6 +158,7 @@ pub struct BookCase<'a> {
     pub fn page_count(self) -> u64 {
         self.page_count
     }
+
 } impl<'a> fmt::Display for BookCase<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let dwidth: usize = (self.directory_count.ilog10() + 1) as usize;
