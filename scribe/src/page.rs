@@ -27,21 +27,7 @@ pub struct Page<const N: usize> {
         }
     }
 
-    pub fn to_byte_slice<'a>(self) -> &'a [u8] {
-        let ptr =  &self as *const Page<N> as *const u8;
-        unsafe {
-            std::slice::from_raw_parts(ptr, std::mem::size_of::<Page<N>>())
-        }
-    }
-    pub fn from_byte_slice<'a>(slice: &[u8]) -> Option<&Page<N>> {
-        if slice.len() != std::mem::size_of::<Page<N>>() {
-            return None;
-        }
-        let ptr = slice.as_ptr() as *const Page<N>;
-        Some(unsafe {&*ptr })
-    }
     
-
     ////////////////////////////////////////////////////
     //// Data Functions
     #[allow(dead_code)]
@@ -103,48 +89,128 @@ impl<const N:usize> fmt::Display for Page<N> {
     }
 }
 
-#[test]
-fn serialize_page() {
-    let flat_tv  = [
-        0xC0, 0xC1, 0xC2, 0xC3, // preseed
-        0xB0, 0xB1, 0xB2, 0xB3, // file
-        0xA0, 0xA1, 0xA2, 0xA3, // page
-        0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
-        0xAC, 0x7E, 0x13,  0xB5, // data segment...
-        0xC5, 0x33, 0x89, 0x4E  //   data cont'd
-    ];
-    let prsd: u32 = 0xC3C2C1C0;
-    let f: u32 = 0xB3B2B1B0;
-    let p: u64 = 0xA7A6A5A4A3A2A1A0;
-    const DATA_SIZE: usize = 1;
+pub mod memory_ops {
 
-    let page: Page<DATA_SIZE> = Page::new(prsd, f, p);
-    let flat: &[u8] = page.to_byte_slice();
-
-    // Test slices
-    assert!(flat_tv[0..4]  == flat[0..4]);
-    assert!(flat_tv[4..8]  == flat[4..8]);
-    assert!(flat_tv[8..16] == flat[8..16]);
-    assert!(flat_tv[16..]  == flat[16..]);
-
+    pub fn to_byte_slice<'a, T>(obj: &T) -> &'a [u8] {
+        let ptr =  obj as *const T as *const u8;
+        unsafe {
+            std::slice::from_raw_parts(ptr, std::mem::size_of::<T>())
+        }
+    }
+    pub fn from_byte_slice<'a, T>(slice: &[u8]) -> Option<&T> {
+        if slice.len() != std::mem::size_of::<T>() {
+            return None;
+        }
+        let ptr = slice.as_ptr() as *const T;
+        Some(unsafe {&*ptr })
+    }
 }
 
-#[test]
-fn deserialize_page() {
-    let flat_tv  = [
-        0xC0, 0xC1, 0xC2, 0xC3, // preseed
-        0xB0, 0xB1, 0xB2, 0xB3, // file
-        0xA0, 0xA1, 0xA2, 0xA3, // page
-        0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
-        0xAC, 0x7E, 0x13,  0xB5, // data segment...
-        0xC5, 0x33, 0x89, 0x4E  //   data cont'd
-    ];
+pub mod page_testing{
+    pub const S: u32 = 0xC3C2C1C0;
+    pub const F: u32 = 0xB3B2B1B0;
+    pub const P: u64 = 0xA7A6A5A4A3A2A1A0;
+    pub const D1: u64 = 0x4E8933C5B5137EAC;
+    pub const D2: u64 = 0x45639083B573314C;
 
-    const DATA_SIZE: usize = 1;
-    let page: &Page<DATA_SIZE> = Page::<DATA_SIZE>::from_byte_slice(&flat_tv).expect("Could not deserialize!");
+    #[test]
+    fn serialize_single_page() {
+        use super::Page;
+        use super::memory_ops::to_byte_slice;
+        let flat_tv: [u8; 24]  = [
+            0xC0, 0xC1, 0xC2, 0xC3,  // preseed
+            0xB0, 0xB1, 0xB2, 0xB3,  // file
+            0xA0, 0xA1, 0xA2, 0xA3,  // page
+            0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
+            0xAC, 0x7E, 0x13, 0xB5, // data segment...
+            0xC5, 0x33, 0x89, 0x4E   //  data cont'd
+        ];
+        const DATA_SIZE: usize = 1;
 
-    assert!(page.preseed == 0xC3C2C1C0);
-    assert!(page.file    == 0xB3B2B1B0);
-    assert!(page.page    == 0xA7A6A5A4A3A2A1A0);
-    assert!(page.data[0] == 0x4E8933C5B5137EAC);
+        let page: Page<DATA_SIZE> = Page::new(S, F, P);
+        let flat: &[u8] = to_byte_slice(&page);
+
+        // Test slices
+        assert!(flat_tv  == flat);
+    }
+
+    #[test]
+    fn serialize_mulit_page() {
+        use super::Page;
+        use super::memory_ops::to_byte_slice;
+        let flat_tv  = [
+            0xC0, 0xC1, 0xC2, 0xC3,  // preseed
+            0xB0, 0xB1, 0xB2, 0xB3,  // file
+            0xA0, 0xA1, 0xA2, 0xA3,  // page
+            0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
+            0xAC, 0x7E, 0x13, 0xB5, // data segment...
+            0xC5, 0x33, 0x89, 0x4E,  //  data cont'd
+            0xB0, 0xB1, 0xB2, 0xB3,  // file
+            0xC0, 0xC1, 0xC2, 0xC3,  // preseed
+            0xA0, 0xA1, 0xA2, 0xA3,  // page
+            0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
+            0x4C, 0x31, 0x73, 0xB5,  // data segment...
+            0x83, 0x90, 0x63, 0x45   //  data cont'd
+        ];
+        const DATA_SIZE: usize = 1;
+
+        let page1: Page<DATA_SIZE> = Page::new(S, F, P);
+        let page2: Page<DATA_SIZE> = Page::new(F, S, P);
+        let pages: [Page<DATA_SIZE>; 2] = [page1, page2];
+
+        let pages_bytes = to_byte_slice(&pages);
+
+        assert!(flat_tv  == pages_bytes);
+    }
+
+    #[test]
+    fn deserialize_single_page() {
+        use super::Page;
+        use super::memory_ops::from_byte_slice;
+        let flat_tv: [u8; 24]  = [
+            0xC0, 0xC1, 0xC2, 0xC3,  // preseed
+            0xB0, 0xB1, 0xB2, 0xB3,  // file
+            0xA0, 0xA1, 0xA2, 0xA3,  // page
+            0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
+            0xAC, 0x7E, 0x13, 0xB5, // data segment...
+            0xC5, 0x33, 0x89, 0x4E   //  data cont'd
+        ];
+        const DATA_SIZE: usize = 1;
+        let page: &Page<DATA_SIZE> = from_byte_slice(&flat_tv).expect("Could not deserialize!");
+
+        assert!(page.preseed == S,  "{:X} != {:X}", page.preseed, S);
+        assert!(page.file    == F,  "{:X} != {:X}", page.file, F);
+        assert!(page.page    == P,  "{:X} != {:X}", page.page, P );
+        assert!(page.data[0] == D1, "{:X} != {:X}", page.data[0], D1);
+    }
+    #[test]
+    fn deserialize_mulit_page() {
+        use super::Page;
+        use super::memory_ops::from_byte_slice;
+        let flat_tv  = [
+            0xC0, 0xC1, 0xC2, 0xC3,  // preseed
+            0xB0, 0xB1, 0xB2, 0xB3,  // file
+            0xA0, 0xA1, 0xA2, 0xA3,  // page
+            0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
+            0xAC, 0x7E, 0x13, 0xB5, // data segment...
+            0xC5, 0x33, 0x89, 0x4E,  //  data cont'd
+            0xB0, 0xB1, 0xB2, 0xB3,  // file
+            0xC0, 0xC1, 0xC2, 0xC3,  // preseed
+            0xA0, 0xA1, 0xA2, 0xA3,  // page
+            0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
+            0x4C, 0x31, 0x73, 0xB5,  // data segment...
+            0x83, 0x90, 0x63, 0x45   //  data cont'd
+        ];
+        const DATA_SIZE: usize = 1;
+        let pages: &[Page<DATA_SIZE>; 2] = from_byte_slice(&flat_tv).expect("Could not deserialize!");
+
+        assert!(pages[0].preseed == S,  "{:X} != {:X}", pages[0].preseed, S);
+        assert!(pages[0].file    == F,  "{:X} != {:X}", pages[0].file, F);
+        assert!(pages[0].page    == P,  "{:X} != {:X}", pages[0].page, P);
+        assert!(pages[0].data[0] == D1, "{:X} != {:X}", pages[0].data[0], D1);
+        assert!(pages[1].preseed == F,  "{:X} != {:X}", pages[1].preseed, F);
+        assert!(pages[1].file    == S,  "{:X} != {:X}", pages[1].file, S);
+        assert!(pages[1].page    == P,  "{:X} != {:X}", pages[1].page, P);
+        assert!(pages[1].data[0] == D2, "{:X} != {:X}", pages[1].data[0], D2);
+    }
 }
