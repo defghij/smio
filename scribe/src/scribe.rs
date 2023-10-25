@@ -16,12 +16,12 @@ use std::io::{
 //    Write
 };
 use std::fmt;
+use super::page::METADATA_SIZE;
 
 
 pub const PAGE_SIZE: usize     = 4096 /*bytes*/;
-pub const METADATA_SIZE: usize = 16 /*bytes*/;
 pub const DATA_SIZE: usize     = PAGE_SIZE - METADATA_SIZE /*bytes*/;
-pub const DATA_WORDS: usize    = DATA_SIZE / 8; 
+pub const WORDS: usize    = DATA_SIZE / 8; 
 pub const PAGE_COUNT: usize      = 512;
 pub const PAGES_PER_WRITE: usize = 256;
 type PageBytes = [u8; PAGE_SIZE];
@@ -162,6 +162,11 @@ pub struct BookCase<'a> {
         self.page_count
     }
 
+    #[inline(always)]
+    pub fn word_count(self) -> u64 {
+        self.page_size as u64 / 8
+    }
+
 } impl<'a> fmt::Display for BookCase<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let dwidth: usize = (self.directory_count.ilog10() + 1) as usize;
@@ -184,43 +189,8 @@ pub struct BookCase<'a> {
 }
 
 
+mod bookcase_testing {
 
-
-/*
-pub fn open_book(path:String) -> File {
-
-
-    let amount_of_work: AtomicUsize = AtomicUsize::new(file_count * PAGES_PER_FILE);
-
-
-    // Initialize to a default
-    let book: &mut [Page<DSEGSIZE>; PAGES_PER_FILE] = &mut [Page::<DSEGSIZE>::new(0, 0, 0); PAGES_PER_FILE];
-
-    for file_id in 0..file_count {
-        let file_path: String = format!("{}/{}{}/{}{}",
-                                    prefix,
-                                    dir_prefix,
-                                    file_id.rem_euclid(dir_count),
-                                    file_prefix,
-                                    file_id
-                                );
-
-        for page_id in 0..PAGES_PER_FILE {
-            let p: Page<DSEGSIZE> = Page::new(file_id as u32, page_id as u64, 0xdead);
-            book[page_id] = p;
-        }
-
-        let deflated: Vec<u8> = match bitcode::encode(book) {
-            Ok(d) => d,
-            Err(why) => panic!("[E] Unable to serialize pages: {}", why)
-        };
-
-
-        file.write_all(&deflated).expect("[E] Failed to write book to disk!");
-        file.flush()?;
-    }
-    Ok(())
-}*/
-
+}
 
 

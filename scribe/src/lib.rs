@@ -4,7 +4,11 @@ pub mod scribe;
 
 pub mod memory_ops {
 
-    pub fn to_byte_slice<'a, S, D>(obj: &S) -> &'a D {
+    pub fn to_byte_slice<'a, S, D>(obj: &S) -> &'a D
+    where
+        D: Sized,
+        S: Sized 
+    {
         unsafe {
             std::mem::transmute(obj)
         }

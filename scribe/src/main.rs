@@ -25,7 +25,7 @@ use scribe::{
     scribe::{
         BookCase,
         PAGE_SIZE,
-        DATA_WORDS,
+        WORDS,
         PAGE_COUNT,
         PAGES_PER_WRITE
     },
