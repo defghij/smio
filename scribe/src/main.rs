@@ -25,8 +25,12 @@ use scribe::{
     scribe::{
         BookCase,
         PAGE_SIZE,
-        DATA_SIZE,
-        PAGE_COUNT
+        DATA_WORDS,
+        PAGE_COUNT,
+        PAGES_PER_WRITE
+    },
+    memory_ops::{
+      to_byte_slice  
     }
 };
 use aio_rs::aio::{ 
@@ -49,7 +53,8 @@ fn main() -> Result<()> {
     let file_prefix: String = String::from("book");
     let directory_count: u32 = 11;
     let file_count: u32 = 120;
-    //let preseed: u32 = 0xdeadbeef;
+    const WRITE_BUFFER_SIZE: usize = PAGES_PER_WRITE * PAGE_SIZE;
+    let preseed: u32 = 0xdeadbeef;
 
     let bookcase: BookCase = BookCase::new(&path_prefix,
                                            &directory_prefix,
@@ -61,13 +66,17 @@ fn main() -> Result<()> {
     println!("About to build\n{bookcase}");
     bookcase.construct()?;
     println!("finished");
+    let write_buffer: [u8; WRITE_BUFFER_SIZE] = [0; WRITE_BUFFER_SIZE];
+    
+
+        
 
 
 
     /**************************
      * Set Up IO              *
      **************************/
-    let max_events: u32 = 1;
+    let max_events: u32 = PAGES_PER_WRITE as u32;
     let mut ctx: AioContext = AioContext::new();
     let ret = aio_setup(max_events, &mut ctx);
     
@@ -98,13 +107,13 @@ fn main() -> Result<()> {
     /**************************
      * Populate Books         *
      **************************/
-    for _bid in 0..bookcase.book_count() {
-            /*
+     /* 
+    for bid in 0..bookcase.book_count() {
         let file: File = bookcase.open_book(bid, false, true);
         let file_descriptor = file.as_raw_fd();
         for pid in 0..(bookcase.page_count() as usize) {
-            let page: Page<DATA_SIZE> = Page::new(preseed, bid as u32, pid as u64);
-            let mut source_buffer: [u8] = page.to_byte_slice();
+            let page: Page<DATA_WORDS> = Page::new(preseed, bid as u32, pid as u64);
+            let mut source_buffer: [u8; PAGE_SIZE] = to_byte_slice(&page);
             let file_offset: isize = (PAGE_SIZE * pid) as isize;
             let request_tag: u64 = ((pid << 16) | bid as usize) as u64;
             let request_code: IoCmd = IoCmd::Pwrite;
@@ -117,11 +126,11 @@ fn main() -> Result<()> {
                 .add_buffer(&mut source_buffer);
 
             let mut requests: [AioRequest; 1] = [request];
-            //let ret = aio_submit(ctx, &mut requests);
-            //if ret.is_err() { panic!("Failed to submit request for page {} in book {}!", pid, bid); }
+            let ret = aio_submit(ctx, &mut requests);
+            if ret.is_err() { panic!("Failed to submit request for page {} in book {}!", pid, bid); }
         }
-            */
     }
+    */
 
     //bookcase.demolish()?; // Revert directory structure. Shouldnt be used in practice.
 

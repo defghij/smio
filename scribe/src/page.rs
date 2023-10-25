@@ -1,6 +1,5 @@
 use rand_xoshiro::rand_core::{RngCore, SeedableRng};
 use rand_xoshiro::Xoroshiro128PlusPlus;
-use bitcode::{Encode, Decode};
 use std::fmt;
 
 
@@ -9,7 +8,7 @@ use std::fmt;
 // 1. Need to be able to write pages an array in memory? Maybe the stack is sufficient?
 
 #[repr(C)]
-#[derive(Encode, Decode, Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct Page<const N: usize> {
     preseed: u32,
     file: u32,
@@ -89,22 +88,6 @@ impl<const N:usize> fmt::Display for Page<N> {
     }
 }
 
-pub mod memory_ops {
-
-    pub fn to_byte_slice<'a, T>(obj: &T) -> &'a [u8] {
-        let ptr =  obj as *const T as *const u8;
-        unsafe {
-            std::slice::from_raw_parts(ptr, std::mem::size_of::<T>())
-        }
-    }
-    pub fn from_byte_slice<'a, T>(slice: &[u8]) -> Option<&T> {
-        if slice.len() != std::mem::size_of::<T>() {
-            return None;
-        }
-        let ptr = slice.as_ptr() as *const T;
-        Some(unsafe {&*ptr })
-    }
-}
 
 pub mod page_testing{
     pub const S: u32 = 0xC3C2C1C0;
@@ -116,7 +99,7 @@ pub mod page_testing{
     #[test]
     fn serialize_single_page() {
         use super::Page;
-        use super::memory_ops::to_byte_slice;
+        use super::super::memory_ops::to_byte_slice;
         let flat_tv: [u8; 24]  = [
             0xC0, 0xC1, 0xC2, 0xC3,  // preseed
             0xB0, 0xB1, 0xB2, 0xB3,  // file
@@ -137,7 +120,7 @@ pub mod page_testing{
     #[test]
     fn serialize_mulit_page() {
         use super::Page;
-        use super::memory_ops::to_byte_slice;
+        use super::super::memory_ops::to_byte_slice;
         let flat_tv  = [
             0xC0, 0xC1, 0xC2, 0xC3,  // preseed
             0xB0, 0xB1, 0xB2, 0xB3,  // file
@@ -152,11 +135,11 @@ pub mod page_testing{
             0x4C, 0x31, 0x73, 0xB5,  // data segment...
             0x83, 0x90, 0x63, 0x45   //  data cont'd
         ];
-        const DATA_SIZE: usize = 1;
+        const DATA_WORDS: usize = 1;
 
-        let page1: Page<DATA_SIZE> = Page::new(S, F, P);
-        let page2: Page<DATA_SIZE> = Page::new(F, S, P);
-        let pages: [Page<DATA_SIZE>; 2] = [page1, page2];
+        let page1: Page<DATA_WORDS> = Page::new(S, F, P);
+        let page2: Page<DATA_WORDS> = Page::new(F, S, P);
+        let pages: [Page<DATA_WORDS>; 2] = [page1, page2];
 
         let pages_bytes = to_byte_slice(&pages);
 
@@ -166,7 +149,7 @@ pub mod page_testing{
     #[test]
     fn deserialize_single_page() {
         use super::Page;
-        use super::memory_ops::from_byte_slice;
+        use super::super::memory_ops::from_byte_slice;
         let flat_tv: [u8; 24]  = [
             0xC0, 0xC1, 0xC2, 0xC3,  // preseed
             0xB0, 0xB1, 0xB2, 0xB3,  // file
@@ -175,8 +158,8 @@ pub mod page_testing{
             0xAC, 0x7E, 0x13, 0xB5, // data segment...
             0xC5, 0x33, 0x89, 0x4E   //  data cont'd
         ];
-        const DATA_SIZE: usize = 1;
-        let page: &Page<DATA_SIZE> = from_byte_slice(&flat_tv).expect("Could not deserialize!");
+        const DATA_WORDS: usize = 1;
+        let page: &Page<DATA_WORDS> = from_byte_slice(&flat_tv).expect("Could not deserialize!");
 
         assert!(page.preseed == S,  "{:X} != {:X}", page.preseed, S);
         assert!(page.file    == F,  "{:X} != {:X}", page.file, F);
@@ -186,7 +169,7 @@ pub mod page_testing{
     #[test]
     fn deserialize_mulit_page() {
         use super::Page;
-        use super::memory_ops::from_byte_slice;
+        use super::super::memory_ops::from_byte_slice;
         let flat_tv  = [
             0xC0, 0xC1, 0xC2, 0xC3,  // preseed
             0xB0, 0xB1, 0xB2, 0xB3,  // file
@@ -201,8 +184,8 @@ pub mod page_testing{
             0x4C, 0x31, 0x73, 0xB5,  // data segment...
             0x83, 0x90, 0x63, 0x45   //  data cont'd
         ];
-        const DATA_SIZE: usize = 1;
-        let pages: &[Page<DATA_SIZE>; 2] = from_byte_slice(&flat_tv).expect("Could not deserialize!");
+        const DATA_WORDS: usize = 1;
+        let pages: &[Page<DATA_WORDS>; 2] = from_byte_slice(&flat_tv).expect("Could not deserialize!");
 
         assert!(pages[0].preseed == S,  "{:X} != {:X}", pages[0].preseed, S);
         assert!(pages[0].file    == F,  "{:X} != {:X}", pages[0].file, F);
