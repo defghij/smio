@@ -9,7 +9,6 @@ use std::fmt;
 
 pub const METADATA_SIZE: usize = 16 /*bytes*/;
 
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Page<const WORDS: usize> {

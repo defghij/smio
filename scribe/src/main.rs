@@ -21,13 +21,12 @@ use std::{
     os::fd::AsRawFd
 };
 use scribe::{
+    PAGE_SIZE,
+    PAGE_COUNT,
+    PAGES_PER_WRITE,
     page::Page,
-    scribe::{
+    bookcase::{
         BookCase,
-        PAGE_SIZE,
-        WORDS,
-        PAGE_COUNT,
-        PAGES_PER_WRITE
     },
     memory_ops::{
       to_byte_slice  

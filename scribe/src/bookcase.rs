@@ -1,34 +1,19 @@
 //use std::os::unix::prelude::OpenOptionsExt;
-//use std::sync::atomic::AtomicUsize;
 use std::{
     path::Path,
     fs::{
         OpenOptions,
         File,
         remove_file,
-//        remove_dir,
         remove_dir_all,
         create_dir_all,
     }
 };
 use std::io::{
     Result,
-//    Write
 };
 use std::fmt;
-use super::page::METADATA_SIZE;
 
-
-pub const PAGE_SIZE: usize     = 4096 /*bytes*/;
-pub const DATA_SIZE: usize     = PAGE_SIZE - METADATA_SIZE /*bytes*/;
-pub const WORDS: usize    = DATA_SIZE / 8; 
-pub const PAGE_COUNT: usize      = 512;
-pub const PAGES_PER_WRITE: usize = 256;
-type PageBytes = [u8; PAGE_SIZE];
-//const PAGE_SIZE_MIN:   usize = 4096;
-//const CHAPTER_SIZE:    usize = 512;
-//const O_DIRECT: i32 = 0x4000;
-//const DSEGSIZE:       usize = 8;  
 
 /// A structure that encapsulates everything the application could
 /// know about the directory, file, and page structure at run-time
