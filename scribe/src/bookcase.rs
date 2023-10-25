@@ -30,26 +30,12 @@ type PageBytes = [u8; PAGE_SIZE];
 //const O_DIRECT: i32 = 0x4000;
 //const DSEGSIZE:       usize = 8;  
 
-
-
-/*******************************
- *
- * What Needs To Happen
- * - Create Mode:
- *  - Func :: Create directories
- *  - Func :: Create Files (truncated)
- *  - Spawn Threads
- *    - Loop
- *    - Thread pulls work
- *    - Opens File
- *    - Generates Pages
- *      - When queue threshold reached, write
- *      - When write threshold reached, write (may be same as above)
- *      - When end of file, write
- *
- * Scribe should handle only the I/O adjacent tasks
- */
-
+/// A structure that encapsulates everything the application could
+/// know about the directory, file, and page structure at run-time
+/// as well as relevant operations on that structure.
+///
+/// This application has numerous side-effects as it interacts with
+/// the operating system to create and desctory inodes.
 #[derive(Debug, Clone, Copy)]
 pub struct BookCase<'a> {
     path_prefix: &'a str,
@@ -187,10 +173,3 @@ pub struct BookCase<'a> {
         Ok(())
     }
 }
-
-
-mod bookcase_testing {
-
-}
-
-
