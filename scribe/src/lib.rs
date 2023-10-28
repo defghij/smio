@@ -1,6 +1,7 @@
 //mod scribe;
 pub mod page;
 pub mod bookcase;
+pub mod secretary;
 
 
 // Bookcase structure
@@ -34,457 +35,63 @@ pub mod memory_ops {
     }
 }
 
-pub mod secretary {
+mod integration_tests {
 
-    pub mod scheduler { 
-        use std::sync::{
-            atomic::AtomicU64
+    fn create_pages_from_queue() {
+        use super::{
+            WORDS,PAGES_PER_WRITE, PAGE_SIZE, PAGE_COUNT,
+            memory_ops,
+            secretary::scheduler::{
+                WorkUnit,
+                WorkQueueIterator,
+                WorkUnitIterator,
+            },
+            page::Page,
+            bookcase::BookCase
         };
+        use std::{
+            thread,
+            sync::Arc,
+            cell::Cell
+        };
+        use array_init::array_init;
 
-        fn to_1d(x: u64, y: u64, z: u64, w: u64, h: u64) -> u64 {
-            z * (w * h) + y * w + x
+        let mut handles = vec![];
+        let q: WorkQueueIterator<2,1,1> = 0.into();
+        let queue: Arc<WorkQueueIterator<2,1,1>> = Arc::new(q);
+
+        for _ in 0..4 {
+            let thread_queue = queue.clone();
+
+            let handle = thread::spawn(move || {
+
+                while let Some(range) = thread_queue.next() {
+                    let mut write_buffer: [Page<WORDS>; PAGES_PER_WRITE] = [Page::default(); PAGES_PER_WRITE];
+                    let mut wb_idx: usize = 0;
+
+                    let start: WorkUnit = range.0;
+                    let stop: WorkUnit = range.1;
+                    let mut thread_work: WorkUnitIterator<2,1> = WorkUnitIterator::new(start, stop);
+
+                    //TODO: Need to figure out how to track file change so that data can be written
+                    //before changing over.
+                    while let Some(work) = thread_work.next() {
+                        let fid = work.0;
+                        let pid = work.1;
+                        let page: &mut Page<WORDS> = &mut write_buffer[wb_idx];
+                        page.reinit(0xdead, fid, pid);
+                        wb_idx += 1;
+                    }
+                }
+            });
+            handles.push(handle);
         }
 
-        macro_rules! gen_assert {
-            ($t:ident, $c:expr) => {{
-                struct Check<$t>($t);
-                impl<$t> Check<$t> {
-                    const CHECK: () = assert!($c);
-                }
-                let _ = Check::<$t>::CHECK;
-            }}
+        for handle in handles {
+            handle.join().unwrap();
         }
-
-        #[inline(always)]
-        fn get_grid_element<const X: u64, const S: u64>(i: u64) -> (u64, u64) {
-                let x0: u64 = i.rem_euclid(X);
-                let y0: u64 = i / X;
-                (x0, y0)
-        }
-
-        pub struct WorkUnit( (u32, u64) );
-
-        pub struct WorkRangeIterator<const X: u64, const Y: u64, const S: u64, const M: u64>(AtomicU64);
-        impl<const X: u64, const Y: u64, const S: u64, const M: u64> Iterator for WorkRangeIterator<X,Y,S,M> {
-            type Item = (WorkUnit, WorkUnit);
-                
-            fn next(&mut self) -> Option<Self::Item> {
-                // X = PAGES,
-                // Y = FILES,
-                // S = STEP,
-                // M = MAX
-                // Three cases, since start <= stop:
-                //      1. (start, stop) -> WorkUnit,WorkUnit
-                //      2. (start, stop] -> WorkUnit,WorkUnit
-                //      3. [start, stop] -> None
-                let i: u64 = self.0.fetch_add(S, std::sync::atomic::Ordering::SeqCst);
-
-                // Case 3: [start, stop] -> None
-                if i >= (M) { 
-                    return None;
-                }
-
-                let (x0,y0): (u64, u64) = get_grid_element::<X,S>(i);
-                let start: WorkUnit = WorkUnit( (y0 as u32, x0 ) );
-
-                let (x1,y1): (u64, u64) = get_grid_element::<X,S>( (i + S) - 1);
-
-                let end: WorkUnit;
-
-                if y1 < Y { 
-                    end = WorkUnit( (y1 as u32, x1));
-                } else { // end = EOQ
-                    end = WorkUnit( ((Y-1) as u32, (X - 1)));
-                }
-                Some( (start, end) )
-            }
-        } impl<const X: u64, const Y: u64, const S: u64, const M: u64> From<u64> for WorkRangeIterator<X,Y,S,M> {
-            fn from(item: u64) -> WorkRangeIterator<X,Y,S,M> {
-                WorkRangeIterator(AtomicU64::new(item))
-            }
-        }
-
-        mod tests {
-
-            #[test]
-            fn grid2x1_step1_work2_st() {
-                use super::{WorkUnit, WorkRangeIterator};
-                let queue: WorkRangeIterator<2,1,1,2> = 0.into();
-
-                let mut counter: u64 = 0;
-                for work in queue {
-
-                    let start: WorkUnit = work.0;
-                    let end: WorkUnit = work.1;
-                    let x0: u64 = start.0.1;
-                    let y0: u32 = start.0.0;
-                    let x1: u64 = end.0.1;
-                    let y1: u32 = end.0.0;
-                    
-                    match counter {
-                        0 => {
-                                                                // +-----+-----+
-                            assert!(x0 == 0, "{} ? {}", x0, 0); // |  W  |     |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+
-                            assert!(x1 == 0, "{} ? {}", x1, 0); 
-                            assert!(y1 == 0, "{} ? {}", y1, 0);  
-                        },
-                        1 => {
-                                                                // +-----+-----+
-                            assert!(x0 == 1, "{} ? {}", x0, 1); // |     |  W  |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+
-                            assert!(x1 == 1, "{} ? {}", x1, 1); 
-                            assert!(y1 == 0, "{} ? {}", y1, 0);  
-                        },
-                        _ => unreachable!("Work iterator iterated to far!"),
-                    }
-                    counter += 1;
-                }
-                assert!(counter == 2, "{} ? {}", counter, 2);
-            }
-           
-            #[test]
-            fn grid2x1_step2_work2_st() {
-                use super::{WorkUnit, WorkRangeIterator};
-                let queue: WorkRangeIterator<2,1,2,2> = 0.into();
-
-                let mut counter: u64 = 0;
-                for work in queue {
-
-                    let start: WorkUnit = work.0;
-                    let end: WorkUnit = work.1;
-                    let x0: u64 = start.0.1;
-                    let y0: u32 = start.0.0;
-                    let x1: u64 = end.0.1;
-                    let y1: u32 = end.0.0;
-                    
-                    match counter {
-                        0 => {
-                                                                // +-----+-----+
-                            assert!(x0 == 0, "{} ? {}", x0, 0); // |  W  |  W' |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+
-                            assert!(x1 == 1, "{} ? {}", x1, 1); 
-                            assert!(y1 == 0, "{} ? {}", y1, 0);  
-                        },
-                        _ => unreachable!("Work iterator iterated to far!"),
-                    }
-                    counter += 1;
-                }
-                assert!(counter == 1, "{} ? {}", counter, 2);
-            }
-           
-            #[test]
-            fn grid2x1_step1_work3_st() {
-                use super::{WorkUnit, WorkRangeIterator};
-                let queue: WorkRangeIterator<2,1,1,3> = 0.into();
-
-                let mut counter: u64 = 0;
-                for work in queue {
-
-                    let start: WorkUnit = work.0;
-                    let end: WorkUnit = work.1;
-                    let x0: u64 = start.0.1;
-                    let y0: u32 = start.0.0;
-                    let x1: u64 = end.0.1;
-                    let y1: u32 = end.0.0;
-                    
-                    match counter {
-                        0 => {
-                                                                // +-----+-----+
-                            assert!(x0 == 0, "{} ? {}", x0, 0); // |  W  |     |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+
-                            assert!(x1 == 0, "{} ? {}", x1, 0); 
-                            assert!(y1 == 0, "{} ? {}", y1, 0);  
-                        },
-                        1 => {
-                                                                // +-----+-----+
-                            assert!(x0 == 1, "{} ? {}", x0, 1); // |     |  W  |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+
-                            assert!(x1 == 1, "{} ? {}", x1, 1); 
-                            assert!(y1 == 0, "{} ? {}", y1, 0);  
-                        },
-                        2 => {
-                            println!("{:?}", start.0);
-                            println!("{:?}", end.0);
-                        }
-                        _ => unreachable!("Work iterator iterated to far!"),
-                    }
-                    counter += 1;
-                }
-                assert!(counter == 2, "{} ? {}", counter, 2);
-            }
-
-            #[test]
-            fn grid2x2_step1_work2_st() {
-                use super::{WorkUnit, WorkRangeIterator};
-                let queue: WorkRangeIterator<2,2,1,2> = 0.into();
-
-                let mut counter: u64 = 0;
-                for work in queue {
-
-                    let start: WorkUnit = work.0;
-                    let end: WorkUnit = work.1;
-                    let x0: u64 = start.0.1;
-                    let y0: u32 = start.0.0;
-                    let x1: u64 = end.0.1;
-                    let y1: u32 = end.0.0;
-                    
-                    match counter {
-                        0 => {
-                                                                // +-----+-----+
-                            assert!(x0 == 0, "{} ? {}", x0, 0); // |  W  |     |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+
-                            assert!(y1 == 0, "{} ? {}", y1, 0); // |     |     | 
-                            assert!(x1 == 0, "{} ? {}", x1, 0); // +-----+-----+
-                        },
-                        1 => {
-                                                                // +-----+-----+
-                            assert!(x0 == 1, "{} ? {}", x0, 1); // |     |  W  |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+
-                            assert!(y1 == 0, "{} ? {}", y1, 0); // |     |     | 
-                            assert!(x1 == 1, "{} ? {}", x1, 1); // +-----+-----+
-                        },
-                        _ => unreachable!("Work iterator iterated to far!"),
-                    }
-                    counter += 1;
-                }
-                assert!(counter == 2, "{} ? {}", counter, 2);
-            }
-
-            #[test]
-            fn grid2x2_step1_work4_st() {
-                use super::{WorkUnit, WorkRangeIterator};
-                let queue: WorkRangeIterator<2,2,1,4> = 0.into();
-
-                let mut counter: u64 = 0;
-                for work in queue {
-
-                    let start: WorkUnit = work.0;
-                    let end: WorkUnit = work.1;
-                    let x0: u64 = start.0.1;
-                    let y0: u32 = start.0.0;
-                    let x1: u64 = end.0.1;
-                    let y1: u32 = end.0.0;
-                    
-                    match counter {
-                        0 => {
-                                                                // +-----+-----+
-                            assert!(x0 == 0, "{} ? {}", x0, 0); // |  W  |     |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+
-                            assert!(y1 == 0, "{} ? {}", y1, 0); // |     |     | 
-                            assert!(x1 == 0, "{} ? {}", x1, 0); // +-----+-----+
-                        },
-                        1 => {
-                                                                // +-----+-----+
-                            assert!(x0 == 1, "{} ? {}", x0, 1); // |     |  W  |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+
-                            assert!(x1 == 1, "{} ? {}", x1, 1); // |     |     | 
-                            assert!(y1 == 0, "{} ? {}", y1, 0); // +-----+-----+
-                        },
-                        2 => {
-                                                                // +-----+-----+
-                            assert!(x0 == 0, "{} ? {}", x0, 0); // |     |     |
-                            assert!(y0 == 1, "{} ? {}", y0, 1); // +-----+-----+
-                            assert!(x1 == 0, "{} ? {}", x1, 0); // |  W  |     | 
-                            assert!(y1 == 1, "{} ? {}", y1, 1); // +-----+-----+
-                        },
-                        3 => { 
-                                                                // +-----+-----+
-                            assert!(x0 == 1, "{} ? {}", x0, 1); // |     |     |
-                            assert!(y0 == 1, "{} ? {}", y0, 1); // +-----+-----+
-                            assert!(x1 == 1, "{} ? {}", x0, 1); // |     |  W  | 
-                            assert!(y1 == 1, "{} ? {}", y1, 1); // +-----+-----+
-                        },
-                        _ => unreachable!("Work iterator iterated to far!"),
-                    }
-                    counter += 1;
-                }
-                assert!(counter == 4, "{} ? {}", counter, 4);
-            }
-
-            #[test]
-            fn grid2x2_step2_work4_st() {
-                use super::{WorkUnit, WorkRangeIterator};
-                let queue: WorkRangeIterator<2,2,2,4> = 0.into();
-
-                let mut counter: u64 = 0;
-                for work in queue {
-
-                    let start: WorkUnit = work.0;
-                    let end: WorkUnit = work.1;
-                    let x0: u64 = start.0.1;
-                    let y0: u32 = start.0.0;
-                    let x1: u64 = end.0.1;
-                    let y1: u32 = end.0.0;
-                    
-                    match counter {
-                        0 => {
-                                                                // +-----+-----+
-                            assert!(x0 == 0, "{} ? {}", x0, 0); // |  W  |  W' |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+
-                            assert!(x1 == 1, "{} ? {}", x1, 1); // |     |     | 
-                            assert!(y1 == 0, "{} ? {}", y1, 0); // +-----+-----+
-                        },
-                        1 => {
-                                                                // +-----+-----+
-                            assert!(x0 == 0, "{} ? {}", x0, 0); // |     |     |
-                            assert!(y0 == 1, "{} ? {}", y0, 1); // +-----+-----+
-                            assert!(x1 == 1, "{} ? {}", x1, 1); // |  W  |  W' | 
-                            assert!(y1 == 1, "{} ? {}", y1, 1); // +-----+-----+
-                        },
-                        _ => unreachable!("Work iterator iterated to far!"),
-                    }
-                    counter += 1;
-                }
-                assert!(counter == 2, "{} ? {}", counter, 2);
-            }
-
-            #[test]
-            fn grid3x2_step1_work6_st() {
-                use super::{WorkUnit, WorkRangeIterator};
-                let queue: WorkRangeIterator<3,2,1,6> = 0.into();
-
-                let mut counter: u64 = 0;
-                for work in queue {
-
-                    let start: WorkUnit = work.0;
-                    let end: WorkUnit = work.1;
-                    let x0: u64 = start.0.1;
-                    let y0: u32 = start.0.0;
-                    let x1: u64 = end.0.1;
-                    let y1: u32 = end.0.0;
-                    
-                    match counter {
-                        0 => {
-                                                                // +-----+-----+-----+
-                            assert!(x0 == 0, "{} ? {}", x0, 0); // |  W  |     |     |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+-----+
-                            assert!(x1 == 0, "{} ? {}", x1, 0); // |     |     |     |
-                            assert!(y1 == 0, "{} ? {}", y1, 0); // +-----+-----+-----+
-                        },
-                        1 => {
-                                                                // +-----+-----+-----+
-                            assert!(x0 == 1, "{} ? {}", x0, 1); // |     |  W  |     |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+-----+
-                            assert!(x1 == 1, "{} ? {}", x1, 1); // |     |     |     |
-                            assert!(y1 == 0, "{} ? {}", y1, 0); // +-----+-----+-----+
-                        },
-                        2 => {
-                                                                // +-----+-----+-----+
-                            assert!(x0 == 2, "{} ? {}", x0, 2); // |     |     |  W  |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+-----+
-                            assert!(x1 == 2, "{} ? {}", x1, 2); // |     |     |     |
-                            assert!(y1 == 0, "{} ? {}", y1, 0); // +-----+-----+-----+
-                        },
-                        3 => {
-                                                                // +-----+-----+-----+
-                            assert!(x0 == 0, "{} ? {}", x0, 0); // |     |     |     |
-                            assert!(y0 == 1, "{} ? {}", y0, 1); // +-----+-----+-----+
-                            assert!(x1 == 0, "{} ? {}", x1, 0); // |  W  |     |     |
-                            assert!(y1 == 1, "{} ? {}", y1, 1); // +-----+-----+-----+
-                        },
-                        4 => {
-                                                                // +-----+-----+-----+
-                            assert!(x0 == 1, "{} ? {}", x0, 1); // |     |     |     |
-                            assert!(y0 == 1, "{} ? {}", y0, 1); // +-----+-----+-----+
-                            assert!(x1 == 1, "{} ? {}", x1, 1); // |     |  W  |     |
-                            assert!(y1 == 1, "{} ? {}", y1, 1); // +-----+-----+-----+
-                        },
-                        5 => {
-                                                                // +-----+-----+-----+
-                            assert!(x0 == 2, "{} ? {}", x0, 2); // |     |     |     |
-                            assert!(y0 == 1, "{} ? {}", y0, 1); // +-----+-----+-----+
-                            assert!(x1 == 2, "{} ? {}", x1, 2); // |     |     |  W  |
-                            assert!(y1 == 1, "{} ? {}", y1, 1); // +-----+-----+-----+
-                        },
-                        _ => unreachable!("Work iterator iterated to far!"),
-                    }
-                    counter += 1;
-                }
-                assert!(counter == 6, "{} ? {}", counter, 6);
-            }
-
-            #[test]
-            fn grid3x2_step2_work6_st() {
-                use super::{WorkUnit, WorkRangeIterator};
-                let queue: WorkRangeIterator<3,2,2,6> = 0.into();
-
-                let mut counter: u64 = 0;
-                for work in queue {
-
-                    let start: WorkUnit = work.0;
-                    let end: WorkUnit = work.1;
-                    let x0: u64 = start.0.1;
-                    let y0: u32 = start.0.0;
-                    let x1: u64 = end.0.1;
-                    let y1: u32 = end.0.0;
-                    
-                    match counter {
-                        0 => {
-                                                                // +-----+-----+-----+
-                            assert!(x0 == 0, "{} ? {}", x0, 0); // |  W  |  W' |     |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+-----+
-                            assert!(x1 == 1, "{} ? {}", x1, 1); // |     |     |     |
-                            assert!(y1 == 0, "{} ? {}", y1, 0); // +-----+-----+-----+
-                        },
-                        1 => {
-                                                                // +-----+-----+-----+
-                            assert!(x0 == 2, "{} ? {}", x0, 2); // |     |     |  W  |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+-----+
-                            assert!(x1 == 0, "{} ? {}", x1, 0); // |  W' |     |     |
-                            assert!(y1 == 1, "{} ? {}", y1, 1); // +-----+-----+-----+
-                        },
-                        2 => {
-                                                                // +-----+-----+-----+
-                            assert!(x0 == 1, "{} ? {}", x0, 1); // |     |     |     |
-                            assert!(y0 == 1, "{} ? {}", y0, 1); // +-----+-----+-----+
-                            assert!(x1 == 2, "{} ? {}", x1, 2); // |     |  W  |  W' |
-                            assert!(y1 == 1, "{} ? {}", y1, 1); // +-----+-----+-----+
-                        },
-                        _ => unreachable!("Work iterator iterated to far!"),
-                    }
-                    counter += 1;
-                }
-                assert!(counter == 3, "{} ? {}", counter, 3);
-            }
-
-            #[test]
-            fn grid3x2_step4_work6_st() {
-                use super::{WorkUnit, WorkRangeIterator};
-                let queue: WorkRangeIterator<3,2,4,6> = 0.into();
-
-                let mut counter: u64 = 0;
-                for work in queue {
-
-                    let start: WorkUnit = work.0;
-                    let end: WorkUnit = work.1;
-                    let x0: u64 = start.0.1;
-                    let y0: u32 = start.0.0;
-                    let x1: u64 = end.0.1;
-                    let y1: u32 = end.0.0;
-                    
-                    match counter {
-                        0 => {
-                                                                // +-----+-----+-----+
-                            assert!(x0 == 0, "{} ? {}", x0, 0); // |  W  |     |     |
-                            assert!(y0 == 0, "{} ? {}", y0, 0); // +-----+-----+-----+
-                            assert!(x1 == 0, "{} ? {}", x1, 0); // |  W' |     |     |
-                            assert!(y1 == 1, "{} ? {}", y1, 1); // +-----+-----+-----+
-                        },
-                        1 => {
-                                                                // +-----+-----+-----+
-                            assert!(x0 == 1, "{} ? {}", x0, 1); // |     |     |     |
-                            assert!(y0 == 1, "{} ? {}", y0, 1); // +-----+-----+-----+
-                            assert!(x1 == 2, "{} ? {}", x1, 2); // |     |  W  |  W' |
-                            assert!(y1 == 1, "{} ? {}", y1, 1); // +-----+-----+-----+
-                        },
-                        _ => unreachable!("Work iterator iterated to far!"),
-                    }
-                    counter += 1;
-                }
-                assert!(counter == 2, "{} ? {}", counter, 2);
-            }
-        }
+        
     }
+
 }
 

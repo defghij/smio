@@ -28,6 +28,15 @@ pub struct Page<const WORDS: usize> {
         }
     }
 
+    pub fn default() -> Page<WORDS> {
+        Page::<WORDS> {
+            file: 0,
+            preseed: 0,
+            page: 0,
+            data: [0u64; WORDS]
+        }
+    }
+
     
     ////////////////////////////////////////////////////
     //// Data Functions
@@ -60,6 +69,14 @@ pub struct Page<const WORDS: usize> {
 
     ////////////////////////////////////////////////////
     //// Mutatate Functions
+    #[allow(dead_code)]
+    pub fn reinit(&mut self, preseed: u32, file: u32, page: u64) {
+        self.preseed = preseed;
+        self.file = file;
+        self.page = page;
+        self.data = Page::generate_data(Page::<WORDS>::assemble_seed(file, page, preseed));
+    }
+
     #[allow(dead_code)]
     pub fn mutate_seed(&mut self, preseed: u32) {
         self.preseed = preseed;
