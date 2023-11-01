@@ -8,18 +8,18 @@ pub mod scheduler {
 
     #[allow(dead_code)]
     #[inline(always)]
-    fn get_grid_element<const X: u64, const S: u64>(i: u64) -> (u64, u64) {
-            let x0: u64 = i.rem_euclid(X);
-            let y0: u64 = i / X;
+    fn get_grid_element<const X: usize, const S: usize>(i: u64) -> (u64, u64) {
+            let x0: u64 = i.rem_euclid( X as u64 );
+            let y0: u64 = i / (X as u64);
             (x0, y0)
     }
 
     pub struct WorkUnit( pub (u32, u64) );
-    pub struct WorkUnitIterator<const X: u64, const Y: u64>{
+    pub struct WorkUnitIterator<const X: usize, const Y: usize>{
         current: WorkUnit,
         stop: WorkUnit,
     }
-    impl<const X: u64, const Y: u64> WorkUnitIterator<X,Y>{
+    impl<const X: usize, const Y: usize> WorkUnitIterator<X,Y>{
         pub fn new(start: WorkUnit, stop: WorkUnit) -> WorkUnitIterator<X,Y> {
 
             WorkUnitIterator {
@@ -33,15 +33,15 @@ pub mod scheduler {
             let y0 = self.current.0.0;
             let ex = self.stop.0.1;
             let ey = self.stop.0.0;
-            let current = X * (y0 as u64) + x0;
-            let stop = X * (ey as u64) + ex;
+            let current = (X as u64) * (y0 as u64) + x0;
+            let stop = (X as u64) * (ey as u64) + ex;
 
             if stop < current {
                 return None;
             }
             let result: (u32, u64) = (y0, x0);
 
-            let x1 = (current+1).rem_euclid(X); // page mod PAGE_COUNT
+            let x1 = (current+1).rem_euclid( X as u64); // page mod PAGE_COUNT
             let y1: u32;
             if x1 != 0 {
                 y1 = y0
@@ -66,7 +66,6 @@ pub mod scheduler {
             let mut counter: u64 = 0;
 
             while let Some(work) = work_iter.next() {
-                println!("{},{}", work.0, work.1);
                 match counter {
                     0 => { assert!(work.0 == 0 && work.1 == 0) },
                     1 => { assert!(work.0 == 1 && work.1 == 0) },
@@ -87,7 +86,6 @@ pub mod scheduler {
             let mut counter: u64 = 0;
 
             while let Some(work) = work_iter.next() {
-                println!("{},{}", work.0, work.1);
                 match counter {
                     0 => { assert!(work.0 == 0 && work.1 == 0) },
                     1 => { assert!(work.0 == 0 && work.1 == 1) },
@@ -129,7 +127,6 @@ pub mod scheduler {
             let mut counter: u64 = 0;
 
             while let Some(work) = work_iter.next() {
-                println!("{},{}", work.0, work.1);
                 match counter {
                     0 => { assert!(work.0 == 0 && work.1 == 0) },
                     1 => { assert!(work.0 == 0 && work.1 == 1) },
@@ -185,38 +182,42 @@ pub mod scheduler {
     ///    handle.join().unwrap();
     ///  }
     /// ```
-    pub struct WorkQueueIterator<const X: u64, const Y: u64, const S: u64>(AtomicU64);
-    impl<const X: u64, const Y: u64, const S: u64> WorkQueueIterator<X,Y,S> {
+    pub struct WorkQueueIterator<const X: usize, const Y: usize, const S: usize>(AtomicU64);
+    impl<const X: usize, const Y: usize, const S: usize> WorkQueueIterator<X,Y,S> {
             
         #[allow(dead_code)]
-        pub fn next(&self) -> Option<(WorkUnit, WorkUnit)> {
-            let i: u64 = self.0.fetch_add(S, Ordering::SeqCst);
+        pub fn next(&self) -> Option<(WorkUnit, WorkUnit)> { //TODO, should this return a
+                                                             //WorkUnitIterator??
+            let x: u64 = X as u64;
+            let y: u64 = Y as u64;
+            let s: u64 = S as u64;
+            let i: u64 = self.0.fetch_add(s, Ordering::SeqCst);
 
-            if i >= (X*Y) { 
+            if i >= (x*y) { 
                 return None;
             }
 
             let (x0,y0): (u64, u64) = get_grid_element::<X,S>(i);
             let start: WorkUnit = WorkUnit( (y0 as u32, x0 ) );
 
-            let (x1,y1): (u64, u64) = get_grid_element::<X,S>( (i + S) - 1);
+            let (x1,y1): (u64, u64) = get_grid_element::<X,S>( (i + s) - 1);
 
             let end: WorkUnit;
 
-            if y1 < Y { 
+            if y1 < y { 
                 end = WorkUnit( (y1 as u32, x1));
             } else { // end = EOQ
-                end = WorkUnit( ((Y-1) as u32, (X - 1)));
+                end = WorkUnit( ((y-1) as u32, (x - 1)));
             }
             Some( (start, end) )
         }
-    } impl<const X: u64, const Y: u64, const S: u64> From<u64> for WorkQueueIterator<X,Y,S> {
+    } impl<const X: usize, const Y: usize, const S: usize> From<u64> for WorkQueueIterator<X,Y,S> {
         fn from(item: u64) -> WorkQueueIterator<X,Y,S> {
             WorkQueueIterator(AtomicU64::new(item))
         }
     } 
-    unsafe impl<const X: u64, const Y: u64, const S: u64> Send for WorkQueueIterator<X,Y,S> {}
-    unsafe impl<const X: u64, const Y: u64, const S: u64> Sync for WorkQueueIterator<X,Y,S> {}
+    unsafe impl<const X: usize, const Y: usize, const S: usize> Send for WorkQueueIterator<X,Y,S> {}
+    unsafe impl<const X: usize, const Y: usize, const S: usize> Sync for WorkQueueIterator<X,Y,S> {}
 
     mod work_queue_iterator_tests {
 
