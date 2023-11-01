@@ -7,7 +7,9 @@ use std::fmt;
 //-----------------------
 // 1. Need to be able to write pages an array in memory? Maybe the stack is sufficient?
 
+use super::memory_ops::to_byte_slice;
 pub const METADATA_SIZE: usize = 16 /*bytes*/;
+use super::PAGE_SIZE;
 
 
 #[repr(C)]
@@ -60,7 +62,13 @@ pub struct Page<const WORDS: usize> {
     }
 
     ////////////////////////////////////////////////////
-    //// Mutatate Functions
+    //// Mutatate/Transmute Functions
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            let len = std::mem::size_of::<Page<WORDS>>();
+            std::slice::from_raw_parts(self as *const Page<WORDS> as *const u8, len)
+        }
+    }
     #[allow(dead_code)]
     pub fn mutate_seed(&mut self, preseed: u32) {
         self.preseed = preseed;
@@ -95,6 +103,10 @@ impl<const WORDS:usize> fmt::Display for Page<WORDS> {
                    bytes[4], bytes[5], bytes[6], bytes[7])?;
         }
         Ok(())
+    }
+} impl<const WORDS:usize> AsRef<[u8]> for Page<WORDS> {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
     }
 }
 
@@ -203,7 +215,7 @@ mod transmutation {
         }
 
         #[test]
-        fn two_pages() {
+        fn two_pages_slice() {
             use super::{
                 S, F, P, D1, D2,
                 super::{
@@ -243,7 +255,7 @@ mod transmutation {
 
     mod to_and_from {
         #[test]
-        fn random_page_bytes() {
+        fn random_page_bytes_slice() {
             use super::super::{
                 Page,
                 METADATA_SIZE,
@@ -272,6 +284,97 @@ mod transmutation {
             for (p, page) in pages.iter().enumerate() {
                 assert!(page.validate_page_with(preseed, file, p as u64)); 
             }
+        }
+
+        #[test]
+        fn random_page_bytes_vec() {
+            use super::super::{
+                Page,
+                METADATA_SIZE,
+                super::memory_ops::{
+                    to_byte_slice,
+                    from_byte_slice
+                }
+            };
+            use rand::prelude::*;
+            use array_init::array_init;
+
+            const PAGE_SIZE: usize = 512;
+            const PAGE_COUNT: usize = 64;
+            const WORDS: usize = (PAGE_SIZE - (METADATA_SIZE)) / 8;
+
+            let mut rng: ThreadRng = rand::thread_rng();
+
+            let preseed: u32 = rng.gen();
+            let file: u32 = rng.gen();
+
+            let pages: Vec<Page<WORDS>> = (0..PAGE_COUNT).map(|i|{
+                    Page::new(preseed,file,i as u64)
+                }).collect();
+            
+            
+            for (p, page) in pages.iter().enumerate() {
+                assert!(page.validate_page_with(preseed, file, p as u64)); 
+            }
+        }
+        #[test]
+        fn vec_writes_and_reads() {
+            use super::super::{
+                Page,
+                METADATA_SIZE,
+                super::memory_ops::{
+                    to_byte_slice,
+                    from_byte_slice
+                }
+            };
+            use rand::prelude::*;
+            use array_init::array_init;
+            use std::{
+                fs::File,
+                io::{
+                    Write,
+                    Read
+                }
+            };
+
+            const PAGE_SIZE: usize = 512;
+            const PAGE_COUNT: usize = 64;
+            const WORDS: usize = (PAGE_SIZE - (METADATA_SIZE)) / 8;
+            let tmpfile_name: String = String::from("test.page.serde");
+            let mut tmpfile: File = File::create(tmpfile_name.clone()).expect("Was not able to create temporary file!");
+
+            let mut rng: ThreadRng = rand::thread_rng();
+
+            let preseed: u32 = rng.gen();
+            let file: u32 = rng.gen();
+
+            let pages: Vec<Page<WORDS>> = (0..PAGE_COUNT).map(|i|{
+                    Page::new(preseed,file,i as u64)
+                }).collect();
+
+            let write_buffer: Vec<u8> = pages.into_iter()
+                                             .map(|p|{ p.as_bytes().to_vec() })
+                                             .flatten()
+                                             .collect();
+
+            // Transition from bits in address-space to bits in file-space
+            tmpfile.write_all(write_buffer.as_slice()).unwrap();
+            tmpfile.flush().expect("Could not flush temporary file");
+
+            drop(tmpfile); // Let OS/Rust reap this file descriptor.
+
+            // Transition from bits in file-space to bits in address-space
+            let mut tmpfile: File = File::open(tmpfile_name.clone()).expect("Was not able to open temporary file!");
+            let mut read_buffer: Vec<u8> = Vec::with_capacity(PAGE_COUNT * PAGE_SIZE);
+            let _ = tmpfile.read_exact(read_buffer.as_mut_slice());
+
+
+            let pages_w: &[Page<WORDS>; PAGE_COUNT] = from_byte_slice(&read_buffer).expect("Could not transmute page!");
+
+            for (p, page) in pages_w.iter().enumerate() {
+                assert!(page.validate_page_with(preseed, file, p as u64));
+            }
+            std::fs::remove_file(tmpfile_name.clone()).expect("Unable to remove temporary testing file");
         }
 
         #[test]
@@ -328,7 +431,6 @@ mod transmutation {
                     //std::fs::remove_file(tmpfile_name.clone()); Leave file for troubleshooting test
                     // failure
                     assert!(false);
-
                 } 
             }
             std::fs::remove_file(tmpfile_name.clone()).expect("Unable to remove temporary testing file");

@@ -11,10 +11,15 @@ use std::{
         create_dir_all,
     }
 };
+<<<<<<< Updated upstream
 use std::io::{
     Result,
 //    Write
 };
+=======
+use std::io::Result;
+use std::sync::Arc;
+>>>>>>> Stashed changes
 use std::fmt;
 use super::page::METADATA_SIZE;
 
@@ -36,44 +41,44 @@ type PageBytes = [u8; PAGE_SIZE];
 ///
 /// This application has numerous side-effects as it interacts with
 /// the operating system to create and desctory inodes.
-#[derive(Debug, Clone, Copy)]
-pub struct BookCase<'a> {
-    path_prefix: &'a str,
-    directory_prefix: &'a str,
+#[derive(Debug, Clone)]
+pub struct BookCase {
+    path_prefix: Arc<String>,
+    directory_prefix: Arc<String>,
     directory_count: u32,
-    file_prefix: &'a str,
+    file_prefix: Arc<String>,
     file_count: u32,
     page_size: usize,
     page_count: u64,
-} impl<'a> BookCase<'a> {
-    pub fn new(path_prefix: &'a str,
-               directory_prefix: &'a str,
+} impl BookCase {
+    pub fn new(path_prefix: String,
+               directory_prefix: String,
                directory_count: u32,
-               file_prefix: &'a str,
+               file_prefix: String,
                file_count: u32,
                page_size: usize,
                page_count: u64
-               ) -> BookCase<'a> {
+               ) -> BookCase {
 
         BookCase {
-            path_prefix,
-            directory_prefix,
+            path_prefix: Arc::new(path_prefix),
+            directory_prefix: Arc::new(directory_prefix),
             directory_count,
-            file_prefix,
+            file_prefix: Arc::new(file_prefix),
             file_count,
             page_size,
             page_count
         }
     }
 
-    pub fn construct(self) -> Result<()> {
+    pub fn construct(&self) -> Result<()> {
         for fid in 0..(self.file_count as usize) {
             self.create_book(fid as u32)?;
         }
         Ok(())
     }
 
-    pub fn demolish(self) -> Result<()> {
+    pub fn demolish(&self) -> Result<()> {
         for id in 0..(self.directory_count as usize) {
             let dpath: String = format!("{}/{}{:0width$}",
                 self.path_prefix,
@@ -85,7 +90,7 @@ pub struct BookCase<'a> {
         Ok(())
     }
 
-    fn create_book(self, file_id: u32) -> Result<()> {
+    fn create_book(&self, file_id: u32) -> Result<()> {
         let fsize: usize = self.book_size();
         let path: String = self.book_location(file_id);
         let path: &Path  = Path::new(&path);
@@ -107,7 +112,7 @@ pub struct BookCase<'a> {
         remove_file(&fpath)
     }
 
-    pub fn open_book(self, id: u32, read: bool, write: bool) -> File {
+    pub fn open_book(&self, id: u32, read: bool, write: bool) -> File {
         let fpath: String = self.book_location(id);
         OpenOptions::new()
                     .write(write)
@@ -121,7 +126,7 @@ pub struct BookCase<'a> {
     ////////////////////////////////////////////////////
     //// Utility Functions
     #[inline(always)]
-    pub fn book_location(self, id: u32) -> String {
+    pub fn book_location(&self, id: u32) -> String {
         assert!(id < self.file_count);
         format!("{}/{}{:0dwidth$}/{}{:0fwidth$}",
             self.path_prefix,
@@ -134,26 +139,26 @@ pub struct BookCase<'a> {
     }
 
     #[inline(always)]
-    pub fn book_size(self) -> usize {
+    pub fn book_size(&self) -> usize {
         (self.page_count as usize) * self.page_size
     }
 
     #[inline(always)]
-    pub fn book_count(self) -> u32 {
+    pub fn book_count(&self) -> u32 {
         self.file_count
     }
 
     #[inline(always)]
-    pub fn page_count(self) -> u64 {
+    pub fn page_count(&self) -> u64 {
         self.page_count
     }
 
     #[inline(always)]
-    pub fn word_count(self) -> u64 {
+    pub fn word_count(&self) -> u64 {
         self.page_size as u64 / 8
     }
 
-} impl<'a> fmt::Display for BookCase<'a> {
+} impl fmt::Display for BookCase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let dwidth: usize = (self.directory_count.ilog10() + 1) as usize;
         let fwidth: usize = (self.file_count.ilog10() + 1) as usize;
