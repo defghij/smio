@@ -11,7 +11,6 @@ use super::memory_ops::to_byte_slice;
 pub const METADATA_SIZE: usize = 16 /*bytes*/;
 use super::PAGE_SIZE;
 
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Page<const WORDS: usize> {
@@ -28,6 +27,15 @@ pub struct Page<const WORDS: usize> {
             preseed,
             page,
             data
+        }
+    }
+
+    pub fn default() -> Page<WORDS> {
+        Page::<WORDS> {
+            file: 0,
+            preseed: 0,
+            page: 0,
+            data: [0u64; WORDS]
         }
     }
 
@@ -69,6 +77,14 @@ pub struct Page<const WORDS: usize> {
             std::slice::from_raw_parts(self as *const Page<WORDS> as *const u8, len)
         }
     }
+    #[allow(dead_code)]
+    pub fn reinit(&mut self, preseed: u32, file: u32, page: u64) {
+        self.preseed = preseed;
+        self.file = file;
+        self.page = page;
+        self.data = Page::generate_data(Page::<WORDS>::assemble_seed(file, page, preseed));
+    }
+
     #[allow(dead_code)]
     pub fn mutate_seed(&mut self, preseed: u32) {
         self.preseed = preseed;
