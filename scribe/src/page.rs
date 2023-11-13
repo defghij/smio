@@ -1,6 +1,8 @@
 use rand_xoshiro::rand_core::{RngCore, SeedableRng};
 use rand_xoshiro::Xoroshiro128PlusPlus;
 use std::fmt;
+use bincode;
+use serde::{Serialize, Deserialize};
 
 
 //TODO
@@ -77,6 +79,12 @@ pub struct Page<const WORDS: usize> {
             std::slice::from_raw_parts(self as *const Page<WORDS> as *const u8, len)
         }
     }
+    pub fn from_bytes(bytes: &[u8; PAGE_SIZE]) -> &Page<WORDS> {
+        unsafe {
+            std::mem::transmute::<&[u8;PAGE_SIZE], &Page<WORDS>>(bytes)
+        }
+
+    }
     #[allow(dead_code)]
     pub fn reinit(&mut self, preseed: u32, file: u32, page: u64) {
         self.preseed = preseed;
@@ -124,7 +132,7 @@ impl<const WORDS:usize> fmt::Display for Page<WORDS> {
     fn as_ref(&self) -> &[u8] {
         self.as_bytes()
     }
-}
+} 
 
 #[allow(dead_code)]
 mod transmutation {
@@ -352,6 +360,7 @@ mod transmutation {
                     Read
                 }
             };
+            use bincode;
 
             const PAGE_SIZE: usize = 512;
             const PAGE_COUNT: usize = 64;
@@ -383,7 +392,6 @@ mod transmutation {
             let mut tmpfile: File = File::open(tmpfile_name.clone()).expect("Was not able to open temporary file!");
             let mut read_buffer: Vec<u8> = Vec::with_capacity(PAGE_COUNT * PAGE_SIZE);
             let _ = tmpfile.read_exact(read_buffer.as_mut_slice());
-
 
             let pages_w: &[Page<WORDS>; PAGE_COUNT] = from_byte_slice(&read_buffer).expect("Could not transmute page!");
 
