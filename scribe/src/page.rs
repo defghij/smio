@@ -343,6 +343,15 @@ mod transmutation {
         }
         #[test]
         fn vec_writes_and_reads() {
+            /* This test fails. Rather than trying to manually transmute between types, I should
+             * use invest in learning ByteMuck. Here is an example project that goes from
+             * u8 -> T, https://github.com/MolotovCherry/virtual-display-rs/blob/master/virtual-display-driver/src/edid.rs
+             * If I go this route then I should embed bytemuck in From/To traits for following
+             * types:
+             *  - Vec<Page<WORDS>> and Vec<u8>
+             *  - &[Page<Words] and &[u8]
+             *
+             */
             use super::super::{
                 Page,
                 METADATA_SIZE,
