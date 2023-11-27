@@ -3,12 +3,17 @@ use rand_xoshiro::Xoroshiro128PlusPlus;
 use std::fmt;
 use bincode;
 use serde::{Serialize, Deserialize};
+use bytemuck::{
+    Pod, Zeroable,
+    try_from_bytes, bytes_of,
+};
+
 
 
 //TODO
 //-----------------------
 // 1. Need to be able to write pages an array in memory? Maybe the stack is sufficient?
-
+                              
 use super::memory_ops::to_byte_slice;
 pub const METADATA_SIZE: usize = 16 /*bytes*/;
 use super::PAGE_SIZE;
@@ -114,6 +119,17 @@ pub struct Page<const WORDS: usize> {
         self.data = data;
     }
 }
+
+impl<const WORDS:usize> PartialEq for Page<WORDS> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.preseed != other.preseed { return false; }
+        if self.file != other.file { return false; }
+        if self.page != other.page { return false; }
+        if self.data != other.data { return false; }
+        true
+    }
+}
+
 impl<const WORDS:usize> fmt::Display for Page<WORDS> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "PreSeed: 0x{:08X}\n", self.preseed)?;
@@ -128,11 +144,12 @@ impl<const WORDS:usize> fmt::Display for Page<WORDS> {
         }
         Ok(())
     }
-} impl<const WORDS:usize> AsRef<[u8]> for Page<WORDS> {
-    fn as_ref(&self) -> &[u8] {
-        self.as_bytes()
-    }
-} 
+}
+
+// TODO:
+// Justify these marker traits
+unsafe impl<const WORDS:usize> Pod for Page<WORDS> {}
+unsafe impl<const WORDS:usize> Zeroable for Page<WORDS> {}
 
 #[allow(dead_code)]
 mod transmutation {
@@ -153,26 +170,28 @@ mod transmutation {
                     super::memory_ops::to_byte_slice
                 }
             };
+            use bytemuck;
             let flat_tv: [u8; 24]  = [
                 0xC0, 0xC1, 0xC2, 0xC3,  // preseed
                 0xB0, 0xB1, 0xB2, 0xB3,  // file
                 0xA0, 0xA1, 0xA2, 0xA3,  // page
                 0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
-                0xAC, 0x7E, 0x13, 0xB5, // data segment...
+                0xAC, 0x7E, 0x13, 0xB5,  // data segment...
                 0xC5, 0x33, 0x89, 0x4E   //  data cont'd
             ];
             const WORDS: usize = 1;
             const PAGE_SIZE: usize = METADATA_SIZE + WORDS * 8;
 
             let page: Page<WORDS> = Page::new(S, F, P);
-            let flat: &[u8; PAGE_SIZE] = to_byte_slice(&page);
+            //let flat: &[u8; PAGE_SIZE] = to_byte_slice(&page);
+            let flat: &[u8] = bytemuck::bytes_of(&page);
 
             // Test slices
             assert!(&flat_tv  == flat);
         }
 
         #[test]
-        fn two_pages() {
+        fn two_page_slice() {
             use super::{
                 S, F, P,
                 super::{
@@ -181,12 +200,13 @@ mod transmutation {
                     super::memory_ops::to_byte_slice
                 }
             };
+            use bytemuck;
             let flat_tv  = [
                 0xC0, 0xC1, 0xC2, 0xC3,  // preseed
                 0xB0, 0xB1, 0xB2, 0xB3,  // file
                 0xA0, 0xA1, 0xA2, 0xA3,  // page
                 0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
-                0xAC, 0x7E, 0x13, 0xB5, // data segment...
+                0xAC, 0x7E, 0x13, 0xB5,  // data segment...
                 0xC5, 0x33, 0x89, 0x4E,  //  data cont'd
                 0xB0, 0xB1, 0xB2, 0xB3,  // file
                 0xC0, 0xC1, 0xC2, 0xC3,  // preseed
@@ -203,9 +223,48 @@ mod transmutation {
             let page2: Page<WORDS> = Page::new(F, S, P);
             let pages: [Page<WORDS>; 2] = [page1, page2];
 
-            let pages_bytes: &[u8; PAGES * PAGE_SIZE] = to_byte_slice(&pages);
+            //let pages_bytes: &[u8; PAGES * PAGE_SIZE] = to_byte_slice(&pages);
+            let pages_bytes: &[u8] = bytemuck::bytes_of(&pages);
 
-            assert!(&flat_tv  == pages_bytes);
+            assert!(&flat_tv == pages_bytes);
+        }
+        #[test]
+        fn two_page_vec() {
+            use super::{
+                S, F, P,
+                super::{
+                    Page,
+                    METADATA_SIZE,
+                    super::memory_ops::to_byte_slice
+                }
+            };
+            use bytemuck;
+            let flat_tv  = vec![
+                0xC0, 0xC1, 0xC2, 0xC3,  // preseed
+                0xB0, 0xB1, 0xB2, 0xB3,  // file
+                0xA0, 0xA1, 0xA2, 0xA3,  // page
+                0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
+                0xAC, 0x7E, 0x13, 0xB5,  // data segment...
+                0xC5, 0x33, 0x89, 0x4E,  //  data cont'd
+                0xB0, 0xB1, 0xB2, 0xB3,  // file
+                0xC0, 0xC1, 0xC2, 0xC3,  // preseed
+                0xA0, 0xA1, 0xA2, 0xA3,  // page
+                0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
+                0x4C, 0x31, 0x73, 0xB5,  // data segment...
+                0x83, 0x90, 0x63, 0x45   //  data cont'd
+            ];
+            const WORDS: usize = 1;
+            const PAGE_SIZE: usize = METADATA_SIZE + WORDS * 8;
+            const PAGES: usize = 2;
+            
+            let pages: Vec<Page<WORDS>> = Vec::with_capacity(2);
+            pages.push(Page::new(S, F, P));
+            pages.push(Page::new(F, S, P));
+
+            //let pages_bytes: &[u8; PAGES * PAGE_SIZE] = to_byte_slice(&pages);
+            let pages_bytes: &[u8] = bytemuck::bytes_of(&pages.as_slice());
+
+            assert!(flat_tv == pages_bytes);
         }
 
     }
@@ -220,6 +279,7 @@ mod transmutation {
                     super::memory_ops::from_byte_slice
                 }
             };
+            use bytemuck;
             let flat_tv: [u8; 24]  = [
                 0xC0, 0xC1, 0xC2, 0xC3,  // preseed
                 0xB0, 0xB1, 0xB2, 0xB3,  // file
@@ -231,6 +291,7 @@ mod transmutation {
             const WORDS: usize = 1;
 
             let page: &Page<WORDS> = from_byte_slice(&flat_tv).expect("Could not deserialize!");
+            let page: &Page<WORDS> = bytemuck::try_from_bytes(&flat_tv).expect("Could not convert bytes to Page!");
 
             assert!(page.preseed == S,  "{:X} != {:X}", page.preseed, S);
             assert!(page.file    == F,  "{:X} != {:X}", page.file, F);
@@ -239,7 +300,7 @@ mod transmutation {
         }
 
         #[test]
-        fn two_pages_slice() {
+        fn two_page_slice() {
             use super::{
                 S, F, P, D1, D2,
                 super::{
@@ -247,6 +308,7 @@ mod transmutation {
                     super::memory_ops::from_byte_slice
                 }
             };
+            use bytemuck;
             let flat_tv  = [
                 0xC0, 0xC1, 0xC2, 0xC3,  // preseed
                 0xB0, 0xB1, 0xB2, 0xB3,  // file
@@ -263,7 +325,8 @@ mod transmutation {
             ];
             const WORDS: usize = 1;
 
-            let pages: &[Page<WORDS>; 2] = from_byte_slice(&flat_tv).expect("Could not deserialize!");
+            //let pages: &[Page<WORDS>; 2] = from_byte_slice(&flat_tv).expect("Could not deserialize!");
+            let pages: &[Page<WORDS>;2] = bytemuck::try_from_bytes(&flat_tv).expect("Could not convert bytes to Page!");
 
             assert!(pages[0].preseed == S,  "{:X} != {:X}", pages[0].preseed, S);
             assert!(pages[0].file    == F,  "{:X} != {:X}", pages[0].file, F);
