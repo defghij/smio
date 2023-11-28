@@ -9,12 +9,12 @@ pub mod scheduler {
     #[allow(dead_code)]
     #[inline(always)]
     fn get_grid_element<const X: usize, const S: usize>(i: u64) -> (u64, u64) {
-            let x0: u64 = i.rem_euclid( X as u64 );
+            let x0: u64 = i.rem_euclid(X as u64);
             let y0: u64 = i / (X as u64);
             (x0, y0)
     }
 
-    pub struct WorkUnit( pub (u32, u64) );
+    pub struct WorkUnit( pub (u64, u64) );
     pub struct WorkUnitIterator<const X: usize, const Y: usize>{
         current: WorkUnit,
         stop: WorkUnit,
@@ -28,21 +28,21 @@ pub mod scheduler {
             }
         }
         #[allow(dead_code)]
-        pub fn next(&mut self) -> Option<(u32, u64)> {
+        pub fn next(&mut self) -> Option<(u64, u64)> {
             let x0 = self.current.0.1;
             let y0 = self.current.0.0;
             let ex = self.stop.0.1;
             let ey = self.stop.0.0;
-            let current = (X as u64) * (y0 as u64) + x0;
-            let stop = (X as u64) * (ey as u64) + ex;
+            let current = (X as u64) * (y0) + x0;
+            let stop = (X as u64) * (ey) + ex;
 
             if stop < current {
                 return None;
             }
-            let result: (u32, u64) = (y0, x0);
+            let result: (u64, u64) = (y0, x0);
 
-            let x1 = (current+1).rem_euclid( X as u64); // page mod PAGE_COUNT
-            let y1: u32;
+            let x1 = (current+1).rem_euclid(X as u64); // page mod PAGE_COUNT
+            let y1: u64;
             if x1 != 0 {
                 y1 = y0
             } else {
@@ -154,9 +154,9 @@ pub mod scheduler {
     ///      3. [start, stop] -> None
     ///
     /// Note that the ranges are always inclusive. In the second case, the stop
-    /// value exceeds maximum work X*Y. In this case, the iterator will yield a 
+    /// value exceeds maximum work X*Y. As such, the iterator will yield a 
     /// start WorkUnit and the end WorkUnit will be the final possible work. All
-    /// call after will fall in the the third case.
+    /// calls after will fall in the the third case.
     ///
     /// # Example
     /// ```ignore
@@ -198,16 +198,16 @@ pub mod scheduler {
             }
 
             let (x0,y0): (u64, u64) = get_grid_element::<X,S>(i);
-            let start: WorkUnit = WorkUnit( (y0 as u32, x0 ) );
+            let start: WorkUnit = WorkUnit( (y0 , x0) );
 
             let (x1,y1): (u64, u64) = get_grid_element::<X,S>( (i + s) - 1);
 
             let end: WorkUnit;
 
             if y1 < y { 
-                end = WorkUnit( (y1 as u32, x1));
+                end = WorkUnit( (y1 , x1));
             } else { // end = EOQ
-                end = WorkUnit( ((y-1) as u32, (x - 1)));
+                end = WorkUnit( ((y-1) , (x - 1)));
             }
             Some( (start, end) )
         }
@@ -233,9 +233,9 @@ pub mod scheduler {
                     let start: WorkUnit = work.0;
                     let end: WorkUnit = work.1;
                     let x0: u64 = start.0.1;
-                    let y0: u32 = start.0.0;
+                    let y0: u64 = start.0.0;
                     let x1: u64 = end.0.1;
-                    let y1: u32 = end.0.0;
+                    let y1: u64 = end.0.0;
                     
                     match counter {
                         0 => {
@@ -271,9 +271,9 @@ pub mod scheduler {
                     let start: WorkUnit = work.0;
                     let end: WorkUnit = work.1;
                     let x0: u64 = start.0.1;
-                    let y0: u32 = start.0.0;
+                    let y0: u64 = start.0.0;
                     let x1: u64 = end.0.1;
-                    let y1: u32 = end.0.0;
+                    let y1: u64 = end.0.0;
                     
                     match counter {
                         0 => {
@@ -301,9 +301,9 @@ pub mod scheduler {
                     let start: WorkUnit = work.0;
                     let end: WorkUnit = work.1;
                     let x0: u64 = start.0.1;
-                    let y0: u32 = start.0.0;
+                    let y0: u64 = start.0.0;
                     let x1: u64 = end.0.1;
-                    let y1: u32 = end.0.0;
+                    let y1: u64 = end.0.0;
                     
                     match counter {
                         0 => {
@@ -366,9 +366,9 @@ pub mod scheduler {
                     let start: WorkUnit = work.0;
                     let end: WorkUnit = work.1;
                     let x0: u64 = start.0.1;
-                    let y0: u32 = start.0.0;
+                    let y0: u64 = start.0.0;
                     let x1: u64 = end.0.1;
-                    let y1: u32 = end.0.0;
+                    let y1: u64 = end.0.0;
                     
                     match counter {
                         0 => {
@@ -410,9 +410,9 @@ pub mod scheduler {
                     let start: WorkUnit = work.0;
                     let end: WorkUnit = work.1;
                     let x0: u64 = start.0.1;
-                    let y0: u32 = start.0.0;
+                    let y0: u64 = start.0.0;
                     let x1: u64 = end.0.1;
-                    let y1: u32 = end.0.0;
+                    let y1: u64 = end.0.0;
                     
                     match counter {
                         0 => {
@@ -474,9 +474,9 @@ pub mod scheduler {
                             let start: WorkUnit = work.0;
                             let end: WorkUnit = work.1;
                             let x0: u64 = start.0.1;
-                            let y0: u32 = start.0.0;
+                            let y0: u64 = start.0.0;
                             let x1: u64 = end.0.1;
-                            let y1: u32 = end.0.0;
+                            let y1: u64 = end.0.0;
 
                             if x0 == 0 && y0 == 0 { // Case for first work unit pulled off
                                 assert!(x1 == 0);   // the queue

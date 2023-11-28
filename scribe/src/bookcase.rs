@@ -24,17 +24,17 @@ use std::fmt;
 pub struct BookCase {
     path_prefix: Arc<String>,
     directory_prefix: Arc<String>,
-    directory_count: u32,
+    directory_count: u64,
     file_prefix: Arc<String>,
-    file_count: u32,
+    file_count: u64,
     page_size: usize,
     page_count: u64,
 } impl BookCase {
     pub fn new(path_prefix: String,
                directory_prefix: String,
-               directory_count: u32,
+               directory_count: u64,
                file_prefix: String,
-               file_count: u32,
+               file_count: u64,
                page_size: usize,
                page_count: u64
                ) -> BookCase {
@@ -52,7 +52,7 @@ pub struct BookCase {
 
     pub fn construct(&self) -> Result<()> {
         for fid in 0..(self.file_count as usize) {
-            self.create_book(fid as u32)?;
+            self.create_book(fid as u64)?;
         }
         Ok(())
     }
@@ -69,7 +69,7 @@ pub struct BookCase {
         Ok(())
     }
 
-    fn create_book(&self, file_id: u32) -> Result<()> {
+    fn create_book(&self, file_id: u64) -> Result<()> {
         let fsize: usize = self.book_size();
         let path: String = self.book_location(file_id);
         let path: &Path  = Path::new(&path);
@@ -86,12 +86,12 @@ pub struct BookCase {
     }
 
     #[allow(dead_code)]
-    fn destroy_book(self, id: u32) -> Result<()> {
+    fn destroy_book(self, id: u64) -> Result<()> {
         let fpath: String = self.book_location(id);
         remove_file(&fpath)
     }
 
-    pub fn open_book(&self, id: u32, read: bool, write: bool) -> File {
+    pub fn open_book(&self, id: u64, read: bool, write: bool) -> File {
         let fpath: String = self.book_location(id);
         OpenOptions::new()
                     .write(write)
@@ -105,7 +105,7 @@ pub struct BookCase {
     ////////////////////////////////////////////////////
     //// Utility Functions
     #[inline(always)]
-    pub fn book_location(&self, id: u32) -> String {
+    pub fn book_location(&self, id: u64) -> String {
         assert!(id < self.file_count);
         format!("{}/{}{:0dwidth$}/{}{:0fwidth$}",
             self.path_prefix,
@@ -123,7 +123,7 @@ pub struct BookCase {
     }
 
     #[inline(always)]
-    pub fn book_count(&self) -> u32 {
+    pub fn book_count(&self) -> u64 {
         self.file_count
     }
 

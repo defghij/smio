@@ -55,7 +55,6 @@ mod integration_tests {
         //thread,
         sync::Arc,
     };
-    use stacker::remaining_stack;
 
     const DIRECTORY_COUNT: usize = 2;
     const FILE_COUNT: usize = 2;
@@ -82,7 +81,7 @@ mod integration_tests {
             let start: WorkUnit = range.0;
             let stop: WorkUnit = range.1;
 
-            let mut fid_active: u32 = start.0.0;
+            let mut fid_active: u64 = start.0.0;
             let mut file_active: File = bookcase.open_book(fid_active, false, true);
 
 
@@ -102,7 +101,7 @@ mod integration_tests {
                 }
 
                 let page: &mut Page<WORDS> = &mut page_buffer[wb_idx];
-                page.reinit(0xdead, fid, pid);
+                page.reinit(0xdead, fid as u64, pid as u64, 0);
                 wb_idx += 1;
 
                 if wb_idx == page_buffer.len() {
@@ -121,7 +120,7 @@ mod integration_tests {
             let start: WorkUnit = range.0;
             let stop: WorkUnit = range.1;
 
-            let mut fid_active: u32 = start.0.0;
+            let mut fid_active: u64 = start.0.0;
             let mut file_active: File = bookcase.open_book(fid_active, false, true);
 
 
@@ -135,7 +134,7 @@ mod integration_tests {
                     // Complete any outstanding writes for this file
                     let page_buffer: &Vec<Page<WORDS>> = do_read::<WORDS>(&mut read_buffer, &mut file_active);
                     for page in page_buffer.iter() {
-                        assert!(page.validate_page_with(0xdead, fid, pid));
+                        assert!(page.validate_page_with(0xdead, fid as u64, pid as u64, 0));
                     }
 
                     // Open new file for writing.
@@ -144,13 +143,13 @@ mod integration_tests {
                 }
 
                 let page: &mut Page<WORDS> = &mut page_buffer[wb_idx];
-                page.reinit(0xdead, fid, pid);
+                page.reinit(0xdead, fid as u64, pid as u64, 0);
                 wb_idx += 1;
 
                 if wb_idx == page_buffer.len() {
                     let page_buffer: &Vec<Page<WORDS>> = do_read::<WORDS>(&mut read_buffer, &mut file_active);
                     for page in page_buffer.iter() {
-                        assert!(page.validate_page_with(0xdead, fid, pid));
+                        assert!(page.validate_page_with(0xdead, fid as u64, pid as u64, 0));
                     }
                 }
             }
@@ -159,7 +158,6 @@ mod integration_tests {
 
     #[test]
     fn create_pages_from_queue() {
-        println!("[stack::create_pages_from_queue::start 0x{:X}", remaining_stack().unwrap());
 
         let pprefix: String = String::from("/home/chuck/programming/testing");
         let dprefix: String = String::from("shelf");
@@ -168,9 +166,9 @@ mod integration_tests {
         let bookcase: Arc<BookCase> = Arc::new(
                 BookCase::new(pprefix.to_owned(),
                               dprefix.to_owned(),
-                              DIRECTORY_COUNT as u32,
+                              DIRECTORY_COUNT as u64,
                               fprefix.to_owned(),
-                              FILE_COUNT as u32,
+                              FILE_COUNT as u64,
                               PAGE_SIZE,
                               PAGE_COUNT as u64)
                 );
@@ -182,6 +180,5 @@ mod integration_tests {
     
         //bookcase.demolish().expect("Could not demolish test bookcase");
         assert!(true);
-        println!("[stack::create_pages_from_queue::end 0x{:X}", remaining_stack().unwrap());
     }
 }
