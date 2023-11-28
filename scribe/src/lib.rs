@@ -36,10 +36,11 @@ pub mod memory_ops {
     }
 }
 
+#[cfg(test)]
 mod integration_tests {
     use super::{
         WORDS,PAGES_PER_WRITE, PAGE_SIZE, PAGE_COUNT,
-        memory_ops,
+        //memory_ops,
         secretary::scheduler::{
             WorkUnit,
             WorkQueueIterator,
@@ -51,7 +52,7 @@ mod integration_tests {
     use std::{
         fs::File,
         io:: {Write,Read},
-        thread,
+        //thread,
         sync::Arc,
     };
     use stacker::remaining_stack;

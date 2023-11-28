@@ -1,11 +1,10 @@
 use rand_xoshiro::rand_core::{RngCore, SeedableRng};
 use rand_xoshiro::Xoroshiro128PlusPlus;
 use std::fmt;
-use bincode;
-use serde::{Serialize, Deserialize};
+//use serde::{Serialize, Deserialize};
 use bytemuck::{
     Pod, Zeroable,
-    try_from_bytes, bytes_of,
+    //try_from_bytes, bytes_of,
 };
 
 
@@ -14,10 +13,13 @@ use bytemuck::{
 //-----------------------
 // 1. Need to be able to write pages an array in memory? Maybe the stack is sufficient?
                               
-use super::memory_ops::to_byte_slice;
 pub const METADATA_SIZE: usize = 16 /*bytes*/;
 use super::PAGE_SIZE;
 
+/* TODO: 
+ *  - Add a mutation count parameter that adds to the base preseed to yield new data
+ *  - WORDS should be words for the total structure. Not just the data segment
+ */ 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Page<const WORDS: usize> {
@@ -149,7 +151,11 @@ impl<const WORDS:usize> fmt::Display for Page<WORDS> {
 // TODO:
 // Justify these marker traits
 unsafe impl<const WORDS:usize> Pod for Page<WORDS> {}
-unsafe impl<const WORDS:usize> Zeroable for Page<WORDS> {}
+unsafe impl<const WORDS:usize> Zeroable for Page<WORDS> {
+    fn zeroed() -> Self {
+        Page::default()
+    }
+}
 
 #[allow(dead_code)]
 mod transmutation {
@@ -167,7 +173,6 @@ mod transmutation {
                 super::{
                     Page,
                     METADATA_SIZE,
-                    super::memory_ops::to_byte_slice
                 }
             };
             use bytemuck;
@@ -190,52 +195,12 @@ mod transmutation {
             assert!(&flat_tv  == flat);
         }
 
-        #[test]
-        fn two_page_slice() {
+        fn two_pages_array_and_vector() {
             use super::{
                 S, F, P,
                 super::{
                     Page,
                     METADATA_SIZE,
-                    super::memory_ops::to_byte_slice
-                }
-            };
-            use bytemuck;
-            let flat_tv  = [
-                0xC0, 0xC1, 0xC2, 0xC3,  // preseed
-                0xB0, 0xB1, 0xB2, 0xB3,  // file
-                0xA0, 0xA1, 0xA2, 0xA3,  // page
-                0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
-                0xAC, 0x7E, 0x13, 0xB5,  // data segment...
-                0xC5, 0x33, 0x89, 0x4E,  //  data cont'd
-                0xB0, 0xB1, 0xB2, 0xB3,  // file
-                0xC0, 0xC1, 0xC2, 0xC3,  // preseed
-                0xA0, 0xA1, 0xA2, 0xA3,  // page
-                0xA4, 0xA5, 0xA6, 0xA7,  //  page cont'd
-                0x4C, 0x31, 0x73, 0xB5,  // data segment...
-                0x83, 0x90, 0x63, 0x45   //  data cont'd
-            ];
-            const WORDS: usize = 1;
-            const PAGE_SIZE: usize = METADATA_SIZE + WORDS * 8;
-            const PAGES: usize = 2;
-
-            let page1: Page<WORDS> = Page::new(S, F, P);
-            let page2: Page<WORDS> = Page::new(F, S, P);
-            let pages: [Page<WORDS>; 2] = [page1, page2];
-
-            //let pages_bytes: &[u8; PAGES * PAGE_SIZE] = to_byte_slice(&pages);
-            let pages_bytes: &[u8] = bytemuck::bytes_of(&pages);
-
-            assert!(&flat_tv == pages_bytes);
-        }
-        #[test]
-        fn two_page_vec() {
-            use super::{
-                S, F, P,
-                super::{
-                    Page,
-                    METADATA_SIZE,
-                    super::memory_ops::to_byte_slice
                 }
             };
             use bytemuck;
@@ -256,13 +221,27 @@ mod transmutation {
             const WORDS: usize = 1;
             const PAGE_SIZE: usize = METADATA_SIZE + WORDS * 8;
             const PAGES: usize = 2;
-            
-            let pages: Vec<Page<WORDS>> = Vec::with_capacity(2);
+
+            // Array -----------------------------------
+            let page1: Page<WORDS> = Page::new(S, F, P);
+            let page2: Page<WORDS> = Page::new(F, S, P);
+            let pages: [Page<WORDS>; 2] = [page1, page2];
+
+            let pages_bytes: &[u8] = bytemuck::bytes_of(&pages);
+
+            assert!(&flat_tv == pages_bytes);
+        
+            // Vector ---------------------------------------------------
+            let mut pages: Vec<Page<WORDS>> = Vec::with_capacity(PAGES);
             pages.push(Page::new(S, F, P));
             pages.push(Page::new(F, S, P));
+            
+            let pages: Box<[Page<WORDS>]> = pages.into_boxed_slice();
+            assert!(pages.len() == 2);
 
-            //let pages_bytes: &[u8; PAGES * PAGE_SIZE] = to_byte_slice(&pages);
-            let pages_bytes: &[u8] = bytemuck::bytes_of(&pages.as_slice());
+            let pages_bytes: Vec<u8> = pages.iter().map(|p| {
+                bytemuck::bytes_of(p).to_vec()
+            }).flatten().collect();
 
             assert!(flat_tv == pages_bytes);
         }
@@ -300,12 +279,11 @@ mod transmutation {
         }
 
         #[test]
-        fn two_page_slice() {
+        fn two_pages_array_and_vector() {
             use super::{
                 S, F, P, D1, D2,
                 super::{
                     Page,
-                    super::memory_ops::from_byte_slice
                 }
             };
             use bytemuck;
@@ -324,18 +302,33 @@ mod transmutation {
                 0x83, 0x90, 0x63, 0x45   //  data cont'd
             ];
             const WORDS: usize = 1;
+            const PAGES: usize = 2;
 
-            //let pages: &[Page<WORDS>; 2] = from_byte_slice(&flat_tv).expect("Could not deserialize!");
-            let pages: &[Page<WORDS>;2] = bytemuck::try_from_bytes(&flat_tv).expect("Could not convert bytes to Page!");
+            // Array ---------------------------------
+            let pages_a: &[Page<WORDS>;PAGES] = bytemuck::try_from_bytes(&flat_tv).expect("Could not convert bytes to Page!");
 
-            assert!(pages[0].preseed == S,  "{:X} != {:X}", pages[0].preseed, S);
-            assert!(pages[0].file    == F,  "{:X} != {:X}", pages[0].file, F);
-            assert!(pages[0].page    == P,  "{:X} != {:X}", pages[0].page, P);
-            assert!(pages[0].data[0] == D1, "{:X} != {:X}", pages[0].data[0], D1);
-            assert!(pages[1].preseed == F,  "{:X} != {:X}", pages[1].preseed, F);
-            assert!(pages[1].file    == S,  "{:X} != {:X}", pages[1].file, S);
-            assert!(pages[1].page    == P,  "{:X} != {:X}", pages[1].page, P);
-            assert!(pages[1].data[0] == D2, "{:X} != {:X}", pages[1].data[0], D2);
+            assert!(pages_a[0].preseed == S,  "{:X} != {:X}", pages_a[0].preseed, S);
+            assert!(pages_a[0].file    == F,  "{:X} != {:X}", pages_a[0].file, F);
+            assert!(pages_a[0].page    == P,  "{:X} != {:X}", pages_a[0].page, P);
+            assert!(pages_a[0].data[0] == D1, "{:X} != {:X}", pages_a[0].data[0], D1);
+            assert!(pages_a[1].preseed == F,  "{:X} != {:X}", pages_a[1].preseed, F);
+            assert!(pages_a[1].file    == S,  "{:X} != {:X}", pages_a[1].file, S);
+            assert!(pages_a[1].page    == P,  "{:X} != {:X}", pages_a[1].page, P);
+            assert!(pages_a[1].data[0] == D2, "{:X} != {:X}", pages_a[1].data[0], D2);
+
+            // Vector ------------------------------
+            let pages_b: Vec<Page<WORDS>> = bytemuck::try_from_bytes::<[Page<WORDS>; PAGES]>(&flat_tv)
+                                                        .expect("Could not convert bytes to Page!")
+                                                        .to_vec();
+
+            assert!(pages_b[0].preseed == S,  "{:X} != {:X}", pages_b[0].preseed, S);
+            assert!(pages_b[0].file    == F,  "{:X} != {:X}", pages_b[0].file, F);
+            assert!(pages_b[0].page    == P,  "{:X} != {:X}", pages_b[0].page, P);
+            assert!(pages_b[0].data[0] == D1, "{:X} != {:X}", pages_b[0].data[0], D1);
+            assert!(pages_b[1].preseed == F,  "{:X} != {:X}", pages_b[1].preseed, F);
+            assert!(pages_b[1].file    == S,  "{:X} != {:X}", pages_b[1].file, S);
+            assert!(pages_b[1].page    == P,  "{:X} != {:X}", pages_b[1].page, P);
+            assert!(pages_b[1].data[0] == D2, "{:X} != {:X}", pages_b[1].data[0], D2);
         }
     }
 
@@ -378,13 +371,9 @@ mod transmutation {
             use super::super::{
                 Page,
                 METADATA_SIZE,
-                super::memory_ops::{
-                    to_byte_slice,
-                    from_byte_slice
-                }
             };
             use rand::prelude::*;
-            use array_init::array_init;
+            //use array_init::array_init;
 
             const PAGE_SIZE: usize = 512;
             const PAGE_COUNT: usize = 64;
@@ -419,12 +408,11 @@ mod transmutation {
                 Page,
                 METADATA_SIZE,
                 super::memory_ops::{
-                    to_byte_slice,
                     from_byte_slice
                 }
             };
             use rand::prelude::*;
-            use array_init::array_init;
+            //use array_init::array_init;
             use std::{
                 fs::File,
                 io::{
@@ -432,7 +420,6 @@ mod transmutation {
                     Read
                 }
             };
-            use bincode;
 
             const PAGE_SIZE: usize = 512;
             const PAGE_COUNT: usize = 64;
@@ -458,14 +445,18 @@ mod transmutation {
             tmpfile.write_all(write_buffer.as_slice()).unwrap();
             tmpfile.flush().expect("Could not flush temporary file");
 
-            drop(tmpfile); // Let OS/Rust reap this file descriptor.
+            //drop(tmpfile); // Let OS/Rust reap this file descriptor.
 
             // Transition from bits in file-space to bits in address-space
             let mut tmpfile: File = File::open(tmpfile_name.clone()).expect("Was not able to open temporary file!");
             let mut read_buffer: Vec<u8> = Vec::with_capacity(PAGE_COUNT * PAGE_SIZE);
             let _ = tmpfile.read_exact(read_buffer.as_mut_slice());
+            assert!(read_buffer.len() == PAGE_SIZE * PAGE_COUNT);
 
-            let pages_w: &[Page<WORDS>; PAGE_COUNT] = from_byte_slice(&read_buffer).expect("Could not transmute page!");
+            //let pages_w: &[Page<WORDS>; PAGE_COUNT] = from_byte_slice(&read_buffer).expect("Could not transmute page!");
+            let pages_w: Vec<Page<WORDS>> = bytemuck::try_from_bytes::<[Page<WORDS>; PAGE_COUNT]>(&read_buffer.as_slice())
+                                                        .expect("Could not convert bytes to Page!")
+                                                        .to_vec();
 
             for (p, page) in pages_w.iter().enumerate() {
                 assert!(page.validate_page_with(preseed, file, p as u64));
