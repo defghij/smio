@@ -8,31 +8,37 @@ use bytemuck::{
 };
 
 
-
 //TODO
 //-----------------------
 // 1. Need to be able to write pages an array in memory? Maybe the stack is sufficient?
                               
 pub const METADATA_SIZE: usize = 32 /*bytes*/;
-use super::PAGE_SIZE;
+//use super::PAGE_SIZE;
 
+pub const PAGE_SIZE: usize = METADATA_SIZE + 8;
+
+macro_rules! words {
+    () => {
+        (PAGE_SIZE / 8) - (METADATA_SIZE / 8) 
+    }
+}
 /* TODO: 
  *  - Add a mutation count parameter that adds to the base preseed to yield new data
  *  - WORDS should be words for the total structure. Not just the data segment
  */ 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct Page<const WORDS: usize> {
+pub struct Page {
     seed: u64,
     file: u64,
     page: u64,
     mutations: u64,
-    data: [u64; WORDS]
-} impl<const WORDS: usize> Page<WORDS> {
+    data: [u64; words!()]
+} impl Page {
     #[allow(dead_code)]
-    pub fn new(seed: u64, file: u64, page: u64) -> Page<WORDS> {
-        let data: [u64; WORDS] = Page::generate_data(Page::<WORDS>::assemble_seed(seed, file, page, 0));
-        Page::<WORDS> {
+    pub fn new(seed: u64, file: u64, page: u64) -> Page {
+        let data: [u64; words!()] = Page::generate_data(Page::assemble_seed(seed, file, page, 0));
+        Page {
             file,
             seed,
             page,
@@ -41,13 +47,13 @@ pub struct Page<const WORDS: usize> {
         }
     }
 
-    pub fn default() -> Page<WORDS> {
-        Page::<WORDS> {
+    pub fn default() -> Page {
+        Page {
             file: 0,
             seed: 0,
             page: 0,
             mutations: 0,
-            data: [0u64; WORDS]
+            data: [0u64; words!()]
         }
     }
 
@@ -64,10 +70,10 @@ pub struct Page<const WORDS: usize> {
         seed
     }
     
-    fn generate_data(seed: u64) -> [u64; WORDS] {
+    fn generate_data(seed: u64) -> [u64; words!()] {
         let mut rng = Xoroshiro128PlusPlus::seed_from_u64(seed);
-        let data: [u64; WORDS] = {
-            let mut temp = [0; WORDS];
+        let data: [u64; words!()] = {
+            let mut temp = [0; words!()];
             for elem in temp.iter_mut() {
                 *elem = rng.next_u64();
             }
@@ -77,7 +83,7 @@ pub struct Page<const WORDS: usize> {
     }
 
     pub fn validate_page_with(self, seed: u64, file: u64, page: u64, mutations: u64) -> bool {
-        let data: [u64; WORDS] = Page::generate_data(Page::<0>::assemble_seed(seed, file, page, mutations));
+        let data: [u64; words!()] = Page::generate_data(Page::assemble_seed(seed, file, page, mutations));
         data == self.data
     }
 
@@ -85,13 +91,13 @@ pub struct Page<const WORDS: usize> {
     //// Mutatate/Transmute Functions
     pub fn as_bytes(&self) -> &[u8] {
         unsafe {
-            let len = std::mem::size_of::<Page<WORDS>>();
-            std::slice::from_raw_parts(self as *const Page<WORDS> as *const u8, len)
+            let len = std::mem::size_of::<Page>();
+            std::slice::from_raw_parts(self as *const Page as *const u8, len)
         }
     }
-    pub fn from_bytes(bytes: &[u8; PAGE_SIZE]) -> &Page<WORDS> {
+    pub fn from_bytes(bytes: &[u8; PAGE_SIZE]) -> &Page {
         unsafe {
-            std::mem::transmute::<&[u8;PAGE_SIZE], &Page<WORDS>>(bytes)
+            std::mem::transmute::<&[u8;PAGE_SIZE], &Page>(bytes)
         }
 
     }
@@ -101,33 +107,33 @@ pub struct Page<const WORDS: usize> {
         self.file = file;
         self.page = page;
         self.mutations = mutations;
-        self.data = Page::generate_data(Page::<WORDS>::assemble_seed(seed, file, page, mutations));
+        self.data = Page::generate_data(Page::assemble_seed(seed, file, page, mutations));
     }
 
     #[allow(dead_code)]
     pub fn mutate_seed(&mut self) {
         self.seed += 1;
         self.mutations += 1;
-        let data: [u64; WORDS] = Page::generate_data(Page::<0>::assemble_seed(self.seed, self.file, self.page, self.mutations));
+        let data: [u64; words!()] = Page::generate_data(Page::assemble_seed(self.seed, self.file, self.page, self.mutations));
         self.data = data;
     }
 
     #[allow(dead_code)]
     pub fn mutate_file(&mut self, file: u64) {
         self.file = file;
-        let data: [u64; WORDS] = Page::generate_data(Page::<1>::assemble_seed(self.seed, self.file, self.page, self.mutations));
+        let data: [u64; words!()] = Page::generate_data(Page::assemble_seed(self.seed, self.file, self.page, self.mutations));
         self.data = data;
     }
 
     #[allow(dead_code)]
     pub fn mutate_page(&mut self, page: u64) {
         self.page = page;
-        let data: [u64; WORDS] = Page::generate_data(Page::<1>::assemble_seed(self.seed, self.file, self.page, self.mutations));
+        let data: [u64; words!()] = Page::generate_data(Page::assemble_seed(self.seed, self.file, self.page, self.mutations));
         self.data = data;
     }
 }
 
-impl<const WORDS:usize> PartialEq for Page<WORDS> {
+impl PartialEq for Page {
     fn eq(&self, other: &Self) -> bool {
         if self.seed != other.seed { return false; }
         if self.file != other.file { return false; }
@@ -138,46 +144,46 @@ impl<const WORDS:usize> PartialEq for Page<WORDS> {
     }
 }
 
-/// &Page<WORDS> --> &[u8]
-impl<'a,const WORDS:usize> TryFrom<&'a Page<WORDS>> for &'a [u8] {
+/// &Page --> &[u8]
+impl<'a> TryFrom<&'a Page> for &'a [u8] {
     type Error = bytemuck::PodCastError;
-    fn try_from(value: &'a Page<WORDS>) -> Result<Self, Self::Error> {
+    fn try_from(value: &'a Page) -> Result<Self, Self::Error> {
         Ok(bytemuck::bytes_of(value))
     }
 }
 
-/// Slice conversion: &[u8] --> &Page<WORDS>
-impl<'a,const WORDS:usize> TryFrom<&'a [u8]> for &'a Page<WORDS> {
+/// Slice conversion: &[u8] --> &Page
+impl<'a> TryFrom<&'a [u8]> for &'a Page {
     type Error = bytemuck::PodCastError;
     fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
         bytemuck::try_from_bytes(value)
     }
 }
 
-/// Array conversion: &[u8;N] --> &Page<WORDS>
-impl<'a,const N: usize, const WORDS:usize> TryFrom<&'a [u8;N]> for &'a Page<WORDS> {
+/// Array conversion: &[u8;N] --> &Page
+impl<'a,const N: usize> TryFrom<&'a [u8;N]> for &'a Page {
     type Error = bytemuck::PodCastError;
     fn try_from(value: &'a [u8; N]) -> Result<Self, Self::Error> {
         bytemuck::try_from_bytes(value)
     }
 }
 
-/// Vector conversion: &Vec<u8> --> &Page<WORDS>
-impl<'a,const WORDS:usize> TryFrom<&'a Vec<u8>> for &'a Page<WORDS> {
+/// Vector conversion: &Vec<u8> --> &Page
+impl<'a> TryFrom<&'a Vec<u8>> for &'a Page {
     type Error = bytemuck::PodCastError;
     fn try_from(value: &'a Vec<u8>) -> Result<Self, Self::Error> {
         bytemuck::try_from_bytes(value)
     }
 }
 
-impl<const WORDS:usize> fmt::Display for Page<WORDS> {
+impl fmt::Display for Page {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Seed:    0x{:016X}\n", self.seed)?;
         write!(f, "FileID:  0x{:016X}\n", self.file)?;
         write!(f, "PageID:  0x{:016X}\n", self.page)?;
         write!(f, "MutCnt:  0x{:016X}\n", self.mutations)?;
         write!(f, "Data:\n")?;
-        for i in 0..WORDS {
+        for i in 0..words!() {
             let bytes = self.data[i].to_be_bytes();
             write!(f, "{:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
                    bytes[0], bytes[1], bytes[2], bytes[3],
@@ -189,8 +195,8 @@ impl<const WORDS:usize> fmt::Display for Page<WORDS> {
 
 // TODO:
 // Justify these marker traits
-unsafe impl<const WORDS:usize> Pod for Page<WORDS> {}
-unsafe impl<const WORDS:usize> Zeroable for Page<WORDS> {
+unsafe impl Pod for Page {}
+unsafe impl Zeroable for Page {
     fn zeroed() -> Self {
         Page::default()
     }
@@ -235,24 +241,24 @@ mod transmutation {
             const WORDS: usize = 1;
             const PAGE_SIZE: usize = METADATA_SIZE + WORDS * 8;
 
-            // &Page<WORDS> --> &[u8]
-            let page: Page<WORDS> = Page::new(S, F, P);
+            // &Page --> &[u8]
+            let page: Page = Page::new(S, F, P);
             let bytes: &[u8] = bytemuck::bytes_of(&page);
             assert!(&flat_tv == bytes);
 
-            // Box<Page<WORDS>> --> &[u8]
-            let page: Page<WORDS> = Page::new(S, F, P);
-            let page_box: Box<Page<WORDS>> = Box::new(page);
+            // Box<Page> --> &[u8]
+            let page: Page = Page::new(S, F, P);
+            let page_box: Box<Page> = Box::new(page);
             let bytes: &[u8] = bytemuck::bytes_of(page_box.as_ref());
             assert!(&flat_tv == bytes.as_ref());
 
-            // test that the pointers for Box<Page<WORDS>> --> &[u8] are the same.
-            let page_box_ptr: *const Page<WORDS> = &*page_box;
+            // test that the pointers for Box<Page> --> &[u8] are the same.
+            let page_box_ptr: *const Page = &*page_box;
             let bytes_ptr: *const [u8] = &*bytes;
             assert!(format!("{page_box_ptr:?}") == format!("{bytes_ptr:?}"), "Pointers are not equal: {page_box_ptr:?} != {bytes_ptr:?}");
            
 
-            // Box<Page<WORDS>> --> &[u8]
+            // Box<Page> --> &[u8]
             let bytes: &[u8] = page_box.as_bytes();
             assert!(&flat_tv == bytes);
         }
@@ -286,15 +292,15 @@ mod transmutation {
 
             // From Array -----------------------------------
             // &[Page<Words>; 2] --> &[u8]
-            let page1: Page<WORDS> = Page::new(S, F, P);
-            let page2: Page<WORDS> = Page::new(S, F, P + 1);
-            let pages: [Page<WORDS>; 2] = [page1, page2];
+            let page1: Page = Page::new(S, F, P);
+            let page2: Page = Page::new(S, F, P + 1);
+            let pages: [Page; 2] = [page1, page2];
 
             let bytes: &[u8] = bytemuck::bytes_of(&pages);
 
             assert!(flat_tv == bytes);
 
-            // [Page<WORDS>; PAGES] --> Vec<u8>
+            // [Page; PAGES] --> Vec<u8>
             let bytes: Vec<u8> = pages.iter().flat_map(|p| {
                 let bytes: &[u8] = p.try_into().expect("Unable to convert");
                 bytes.to_vec()
@@ -302,16 +308,16 @@ mod transmutation {
             assert!(flat_tv == bytes);
 
             // From Box ------------------------------------------
-            // Box<[Page<WORDS>]> --> &[u8]
-            let pages: Box<[Page<WORDS>]> = Box::new([
+            // Box<[Page]> --> &[u8]
+            let pages: Box<[Page]> = Box::new([
                 Page::new(S, F, P), Page::new(S, F, P+1)
             ]);
-            let bytes: &[u8] = bytemuck::bytes_of(TryInto::<&[Page<WORDS>;PAGES]>::try_into(pages.as_ref()).expect("Unable to convert"));
+            let bytes: &[u8] = bytemuck::bytes_of(TryInto::<&[Page;PAGES]>::try_into(pages.as_ref()).expect("Unable to convert"));
             assert!(flat_tv == bytes);
             
             // From Vector ---------------------------------------------------
-            // Vec<Page<WORDS>> --> Vec<u8>
-            let mut pages: Vec<Page<WORDS>> = Vec::with_capacity(PAGES);
+            // Vec<Page> --> Vec<u8>
+            let mut pages: Vec<Page> = Vec::with_capacity(PAGES);
             pages.push(Page::new(S, F, P));
             pages.push(Page::new(S, F, P+1));
            
@@ -338,10 +344,10 @@ mod transmutation {
                 0x84, 0x08, 0x08, 0x03, 0xC4, 0x3E, 0xDF, 0xAF,  //  data cont'd
             ];
             const WORDS: usize = 1;
-            let page_tv: Page<WORDS> = Page::new(S, F, P);
+            let page_tv: Page = Page::new(S, F, P);
 
             // Test different single page transformations
-            let pages: [&Page<WORDS>; 4] = [
+            let pages: [&Page; 4] = [
                 bytemuck::try_from_bytes(&flat_tv)
                        .expect("Unable to convert bytes to Page!"),
                 flat_tv.as_slice()
@@ -382,25 +388,25 @@ mod transmutation {
 
             const WORDS: usize = 1;
             const PAGES: usize = 2;
-            let pages_tv: [Page<WORDS>; PAGES] = [
+            let pages_tv: [Page; PAGES] = [
                 Page::new(S, F, P),
                 Page::new(S, F, P+1)
             ];
 
             // From Vector ------------------------------
-            // Vec<u8> --> Vec<Page<WORDS>>
-            let pages: Vec<Page<WORDS>> = bytemuck::try_from_bytes::<[Page<WORDS>; PAGES]>(&flat_tv)
+            // Vec<u8> --> Vec<Page>
+            let pages: Vec<Page> = bytemuck::try_from_bytes::<[Page; PAGES]>(&flat_tv)
                                                         .expect("Could not convert bytes to Page!")
                                                         .to_vec();
             assert!(*pages == pages_tv);
 
-            // Vec<u8> --> &[Page<WORDS>]
-            let pages: &[Page<WORDS>] = bytemuck::try_from_bytes::<[Page<WORDS>; PAGES]>(&flat_tv)
+            // Vec<u8> --> &[Page]
+            let pages: &[Page] = bytemuck::try_from_bytes::<[Page; PAGES]>(&flat_tv)
                                                         .expect("Could not convert bytes to Page!");
             assert!(*pages == pages_tv);
             
-            // Vec<u8> --> &[Page<WORDS>; PAGES]
-            let pages: &[Page<WORDS>; PAGES] = bytemuck::try_from_bytes::<[Page<WORDS>; PAGES]>(&flat_tv)
+            // Vec<u8> --> &[Page; PAGES]
+            let pages: &[Page; PAGES] = bytemuck::try_from_bytes::<[Page; PAGES]>(&flat_tv)
                                                         .expect("Could not convert bytes to Page!");
             assert!(*pages == pages_tv);
 
@@ -408,8 +414,8 @@ mod transmutation {
             // From Array ---------------------------------
             let flat_tv: &[u8] = flat_tv.as_slice();
 
-            // &[u8] --> &[Page<WORDS>; PAGES]
-            let pages: &[Page<WORDS>;PAGES] = bytemuck::try_from_bytes(flat_tv)
+            // &[u8] --> &[Page; PAGES]
+            let pages: &[Page;PAGES] = bytemuck::try_from_bytes(flat_tv)
                                                 .expect("Could not convert bytes to Page!");
             assert!(*pages == pages_tv);
         }
@@ -439,10 +445,10 @@ mod transmutation {
             let seed: u64 = rng.gen();
             let file: u64 = rng.gen();
 
-            let pages: [Page<WORDS>; PAGE_COUNT] = array_init(|i: usize| Page::new(seed, file, i as u64));
+            let pages: [Page; PAGE_COUNT] = array_init(|i: usize| Page::new(seed, file, i as u64));
             let pages_bytes: &[u8; PAGE_COUNT * PAGE_SIZE] = to_byte_slice(&pages);
 
-            let pages: &[Page<WORDS>; PAGE_COUNT] = from_byte_slice(pages_bytes).expect("Could not transmute page!");
+            let pages: &[Page; PAGE_COUNT] = from_byte_slice(pages_bytes).expect("Could not transmute page!");
 
             for (p, page) in pages.iter().enumerate() {
                 assert!(page.validate_page_with(seed, file, p as u64, 0)); 
@@ -467,7 +473,7 @@ mod transmutation {
             let seed: u64 = rng.gen();
             let file: u64 = rng.gen();
 
-            let pages: Vec<Page<WORDS>> = (0..PAGE_COUNT).map(|i|{
+            let pages: Vec<Page> = (0..PAGE_COUNT).map(|i|{
                     Page::new(seed, file, i as u64)
                 }).collect();
             
@@ -483,7 +489,7 @@ mod transmutation {
              * u8 -> T, https://github.com/MolotovCherry/virtual-display-rs/blob/master/virtual-display-driver/src/edid.rs
              * If I go this route then I should embed bytemuck in From/To traits for following
              * types:
-             *  - Vec<Page<WORDS>> and Vec<u8>
+             *  - Vec<Page> and Vec<u8>
              *  - &[Page<Words] and &[u8]
              *
              */
@@ -509,7 +515,7 @@ mod transmutation {
             let seed: u64 = rng.gen();
             let file: u64 = rng.gen();
 
-            let pages: Vec<Page<WORDS>> = (0..PAGE_COUNT).map(|i|{
+            let pages: Vec<Page> = (0..PAGE_COUNT).map(|i|{
                     Page::new(seed, file, i as u64)
                 }).collect();
 
@@ -529,7 +535,7 @@ mod transmutation {
                 assert!(read_buffer.len() == PAGE_SIZE * PAGE_COUNT, "Read {} of {} bytes", read_buffer.len(), PAGE_SIZE * PAGE_COUNT);
             }
 
-            let pages_w: &[Page<WORDS>; PAGE_COUNT] = bytemuck::try_from_bytes::<[Page<WORDS>; PAGE_COUNT]>(&read_buffer.as_slice())
+            let pages_w: &[Page; PAGE_COUNT] = bytemuck::try_from_bytes::<[Page; PAGE_COUNT]>(&read_buffer.as_slice())
                                                         .expect("Could not convert bytes to Page");
 
             for (p, page) in pages_w.iter().enumerate() {
