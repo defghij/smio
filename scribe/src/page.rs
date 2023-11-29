@@ -137,6 +137,8 @@ impl<const WORDS:usize> PartialEq for Page<WORDS> {
         true
     }
 }
+
+/// &Page<WORDS> --> &[u8]
 impl<'a,const WORDS:usize> TryFrom<&'a Page<WORDS>> for &'a [u8] {
     type Error = bytemuck::PodCastError;
     fn try_from(value: &'a Page<WORDS>) -> Result<Self, Self::Error> {
@@ -144,6 +146,7 @@ impl<'a,const WORDS:usize> TryFrom<&'a Page<WORDS>> for &'a [u8] {
     }
 }
 
+/// Slice conversion: &[u8] --> &Page<WORDS>
 impl<'a,const WORDS:usize> TryFrom<&'a [u8]> for &'a Page<WORDS> {
     type Error = bytemuck::PodCastError;
     fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
@@ -151,6 +154,7 @@ impl<'a,const WORDS:usize> TryFrom<&'a [u8]> for &'a Page<WORDS> {
     }
 }
 
+/// Array conversion: &[u8;N] --> &Page<WORDS>
 impl<'a,const N: usize, const WORDS:usize> TryFrom<&'a [u8;N]> for &'a Page<WORDS> {
     type Error = bytemuck::PodCastError;
     fn try_from(value: &'a [u8; N]) -> Result<Self, Self::Error> {
@@ -158,6 +162,7 @@ impl<'a,const N: usize, const WORDS:usize> TryFrom<&'a [u8;N]> for &'a Page<WORD
     }
 }
 
+/// Vector conversion: &Vec<u8> --> &Page<WORDS>
 impl<'a,const WORDS:usize> TryFrom<&'a Vec<u8>> for &'a Page<WORDS> {
     type Error = bytemuck::PodCastError;
     fn try_from(value: &'a Vec<u8>) -> Result<Self, Self::Error> {
@@ -192,6 +197,14 @@ unsafe impl<const WORDS:usize> Zeroable for Page<WORDS> {
 }
 
 #[allow(dead_code)]
+/// These tests serve both as correctness tests and 
+/// as explorations into different methods to convert between types.
+/// In the latter way they are correct, though perhaps not idomatic,
+/// ways to convert between different types of interest.
+/// 
+/// There are three categories of tests: to bytes, from bytes, and both ways.
+/// In the final case, this relies on some intermediate type or structure (i.e
+/// the file system).
 mod transmutation {
     pub const S: u64  = 0xD7D6D5D4D3D2D1D0;
     pub const F: u64  = 0xC7C6C5C4C3C2C1C0;
@@ -201,6 +214,7 @@ mod transmutation {
     pub const D2: u64 = 0xD127816C6EF096AB;
 
     mod to_u8 {
+        /// Test different ways of converting from Page<Words> to [u8]
         #[test]
         fn single_page() {
             use super::{
@@ -221,14 +235,30 @@ mod transmutation {
             const WORDS: usize = 1;
             const PAGE_SIZE: usize = METADATA_SIZE + WORDS * 8;
 
+            // &Page<WORDS> --> &[u8]
             let page: Page<WORDS> = Page::new(S, F, P);
-            let flat: &[u8] = bytemuck::bytes_of(&page);
+            let bytes: &[u8] = bytemuck::bytes_of(&page);
+            assert!(&flat_tv == bytes);
 
-            assert!(&flat_tv  == flat);
+            // Box<Page<WORDS>> --> &[u8]
+            let page: Page<WORDS> = Page::new(S, F, P);
+            let page_box: Box<Page<WORDS>> = Box::new(page);
+            let bytes: &[u8] = bytemuck::bytes_of(page_box.as_ref());
+            assert!(&flat_tv == bytes.as_ref());
+
+            // test that the pointers for Box<Page<WORDS>> --> &[u8] are the same.
+            let page_box_ptr: *const Page<WORDS> = &*page_box;
+            let bytes_ptr: *const [u8] = &*bytes;
+            assert!(format!("{page_box_ptr:?}") == format!("{bytes_ptr:?}"), "Pointers are not equal: {page_box_ptr:?} != {bytes_ptr:?}");
+           
+
+            // Box<Page<WORDS>> --> &[u8]
+            let bytes: &[u8] = page_box.as_bytes();
+            assert!(&flat_tv == bytes);
         }
 
         #[test]
-        fn two_pages_array_and_vector() {
+        fn two_pages() {
             use super::{
                 S, F, P,
                 super::{
@@ -254,35 +284,43 @@ mod transmutation {
             const PAGE_SIZE: usize = METADATA_SIZE + WORDS * 8;
             const PAGES: usize = 2;
 
-            // Array -----------------------------------
+            // From Array -----------------------------------
+            // &[Page<Words>; 2] --> &[u8]
             let page1: Page<WORDS> = Page::new(S, F, P);
             let page2: Page<WORDS> = Page::new(S, F, P + 1);
             let pages: [Page<WORDS>; 2] = [page1, page2];
 
-            let pages_bytes: &[u8] = bytemuck::bytes_of(&pages);
-            let pages_bytes0: Vec<u8> = pages.iter().flat_map(|p| {
+            let bytes: &[u8] = bytemuck::bytes_of(&pages);
+
+            assert!(flat_tv == bytes);
+
+            // [Page<WORDS>; PAGES] --> Vec<u8>
+            let bytes: Vec<u8> = pages.iter().flat_map(|p| {
                 let bytes: &[u8] = p.try_into().expect("Unable to convert");
                 bytes.to_vec()
             }).collect();
+            assert!(flat_tv == bytes);
 
-            assert!(flat_tv == pages_bytes);
-            assert!(flat_tv == pages_bytes0);
-        
-            // Vector ---------------------------------------------------
+            // From Box ------------------------------------------
+            // Box<[Page<WORDS>]> --> &[u8]
+            let pages: Box<[Page<WORDS>]> = Box::new([
+                Page::new(S, F, P), Page::new(S, F, P+1)
+            ]);
+            let bytes: &[u8] = bytemuck::bytes_of(TryInto::<&[Page<WORDS>;PAGES]>::try_into(pages.as_ref()).expect("Unable to convert"));
+            assert!(flat_tv == bytes);
+            
+            // From Vector ---------------------------------------------------
+            // Vec<Page<WORDS>> --> Vec<u8>
             let mut pages: Vec<Page<WORDS>> = Vec::with_capacity(PAGES);
             pages.push(Page::new(S, F, P));
             pages.push(Page::new(S, F, P+1));
-            
-            let pages: Box<[Page<WORDS>]> = pages.into_boxed_slice();
-            assert!(pages.len() == 2);
-
-            let pages_bytes1: Vec<u8> = pages.iter().map(|p| {
-                bytemuck::bytes_of(p).to_vec()
-            }).flatten().collect();
-
-            assert!(flat_tv == pages_bytes);
+           
+            let bytes: Vec<u8> = pages.into_boxed_slice().iter().flat_map(|p| {
+                let pbytes: &[u8] = p.try_into().expect("Unable to convert");
+                pbytes.to_vec()
+            }).collect();
+            assert!(flat_tv == bytes);
         }
-
     }
 
     mod from_u8 {
@@ -300,20 +338,29 @@ mod transmutation {
                 0x84, 0x08, 0x08, 0x03, 0xC4, 0x3E, 0xDF, 0xAF,  //  data cont'd
             ];
             const WORDS: usize = 1;
-            let control_page: Page<WORDS> = Page::new(S, F, P);
+            let page_tv: Page<WORDS> = Page::new(S, F, P);
 
             // Test different single page transformations
-            let test_page0: &Page<WORDS> = bytemuck::try_from_bytes(&flat_tv).expect("Unable to convert bytes to Page!");
-            let test_page1: &Page<WORDS> = flat_tv.as_slice().try_into().expect("Unable to convert bytes to Page");
-            let test_page2: &Page<WORDS> = flat_tv.as_ref().try_into().expect("Unable to convert bytes to Page");
+            let pages: [&Page<WORDS>; 4] = [
+                bytemuck::try_from_bytes(&flat_tv)
+                       .expect("Unable to convert bytes to Page!"),
+                flat_tv.as_slice()
+                       .try_into()
+                       .expect("Unable to convert bytes to Page"),
+                flat_tv.as_ref()
+                       .try_into()
+                       .expect("Unable to convert bytes to Page"),
+                (&flat_tv).try_into()
+                          .expect("Unable to convert bytes to Page")
+            ];
 
-            assert!(*test_page0 == control_page);
-            assert!(*test_page1 == control_page);
-            assert!(*test_page2 == control_page);
+            for page in pages.iter() {
+                assert!(*page == &page_tv);
+            }
         }
 
         #[test]
-        fn two_pages_array_and_vector() {
+        fn two_pages() {
             use super::{
                 S, F, P,
                 super::Page
@@ -332,24 +379,39 @@ mod transmutation {
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // mutations
                 0xAB, 0x96, 0xF0, 0x6E, 0x6C, 0x81, 0x27, 0xD1,  //  data
             ];
+
             const WORDS: usize = 1;
             const PAGES: usize = 2;
-            let control_pages: [Page<WORDS>; PAGES] = [
+            let pages_tv: [Page<WORDS>; PAGES] = [
                 Page::new(S, F, P),
                 Page::new(S, F, P+1)
             ];
 
-
-            // Array ---------------------------------
-            let pages_a: &[Page<WORDS>;PAGES] = bytemuck::try_from_bytes(&flat_tv).expect("Could not convert bytes to Page!");
-            assert!(*pages_a == control_pages);
-
-
-            // Vector ------------------------------
-            let pages_b: Vec<Page<WORDS>> = bytemuck::try_from_bytes::<[Page<WORDS>; PAGES]>(&flat_tv)
+            // From Vector ------------------------------
+            // Vec<u8> --> Vec<Page<WORDS>>
+            let pages: Vec<Page<WORDS>> = bytemuck::try_from_bytes::<[Page<WORDS>; PAGES]>(&flat_tv)
                                                         .expect("Could not convert bytes to Page!")
                                                         .to_vec();
-            assert!(*pages_b == control_pages);
+            assert!(*pages == pages_tv);
+
+            // Vec<u8> --> &[Page<WORDS>]
+            let pages: &[Page<WORDS>] = bytemuck::try_from_bytes::<[Page<WORDS>; PAGES]>(&flat_tv)
+                                                        .expect("Could not convert bytes to Page!");
+            assert!(*pages == pages_tv);
+            
+            // Vec<u8> --> &[Page<WORDS>; PAGES]
+            let pages: &[Page<WORDS>; PAGES] = bytemuck::try_from_bytes::<[Page<WORDS>; PAGES]>(&flat_tv)
+                                                        .expect("Could not convert bytes to Page!");
+            assert!(*pages == pages_tv);
+
+
+            // From Array ---------------------------------
+            let flat_tv: &[u8] = flat_tv.as_slice();
+
+            // &[u8] --> &[Page<WORDS>; PAGES]
+            let pages: &[Page<WORDS>;PAGES] = bytemuck::try_from_bytes(flat_tv)
+                                                .expect("Could not convert bytes to Page!");
+            assert!(*pages == pages_tv);
         }
     }
 
