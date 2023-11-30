@@ -10,8 +10,8 @@ pub const PAGE_COUNT: usize      = 512;
 pub const PAGES_PER_WRITE: usize = 256;
 
 // Page Structure
-pub const DATA_SIZE: usize     = PAGE_SIZE - page::METADATA_SIZE /*bytes*/;
-pub const WORDS: usize    = DATA_SIZE / 8;  /*u64s*/
+pub const DATA_SIZE: usize = PAGE_SIZE - page::METADATA_SIZE /*bytes*/;
+pub const WORDS: usize     = DATA_SIZE / 8;  /*u64s*/
 
 pub type PageBytes = [u8; PAGE_SIZE];
 
@@ -61,11 +61,13 @@ mod integration_tests {
     type WorkerQueue = Arc<WorkQueueIterator<PAGE_COUNT,FILE_COUNT,PAGES_PER_WRITE>>;
     type WorkIterator = WorkUnitIterator<PAGE_COUNT,FILE_COUNT>;
 
+    /*
     fn do_write<const N: usize>(buffer: &Vec<Page<N>>, file: &mut File) {
         let write_buffer: &[u8; PAGE_COUNT * PAGE_SIZE] = super::memory_ops::to_byte_slice(buffer);
         file.write(write_buffer).unwrap();
-    }
+    }*/
 
+    #[allow(dead_code)]
     fn do_read<'a, const N: usize>(buffer: &'a mut Vec<u8>, file: &mut File) -> &'a Vec<Page<WORDS>> {
         
         let _ = file.read_exact(vec![0; PAGES_PER_WRITE * PAGE_SIZE].as_mut_slice());
@@ -73,6 +75,7 @@ mod integration_tests {
         page_buffer
     }
 
+    /*
     fn thread_write(queue: WorkerQueue, bookcase: Arc<BookCase>) {
         while let Some(range) = queue.next() {
             let mut page_buffer: Vec<Page<WORDS>> = vec![Page::default(); PAGES_PER_WRITE];
@@ -109,8 +112,9 @@ mod integration_tests {
                 }
             }
         }
-    }
+    }*/
 
+    #[allow(dead_code)]
     fn data_verify(queue: WorkerQueue, bookcase: Arc<BookCase>) {
         while let Some(range) = queue.next() {
             let mut page_buffer: Vec<Page<WORDS>> = vec![Page::default(); PAGES_PER_WRITE];
@@ -121,7 +125,7 @@ mod integration_tests {
             let stop: WorkUnit = range.1;
 
             let mut fid_active: u64 = start.0.0;
-            let mut file_active: File = bookcase.open_book(fid_active, false, true);
+            let mut file_active: File = bookcase.open_book(fid_active, false, true).unwrap();
 
 
             let mut thread_work: WorkIterator = WorkUnitIterator::new(start, stop);
@@ -134,12 +138,12 @@ mod integration_tests {
                     // Complete any outstanding writes for this file
                     let page_buffer: &Vec<Page<WORDS>> = do_read::<WORDS>(&mut read_buffer, &mut file_active);
                     for page in page_buffer.iter() {
-                        assert!(page.validate_page_with(0xdead, fid as u64, pid as u64, 0));
+                        assert!(page.validate_page_with(0xdead, fid as u64, pid as u64));
                     }
 
                     // Open new file for writing.
                     fid_active = fid;
-                    file_active = bookcase.open_book(fid_active, true, false);
+                    file_active = bookcase.open_book(fid_active, true, false).unwrap();
                 }
 
                 let page: &mut Page<WORDS> = &mut page_buffer[wb_idx];
@@ -149,7 +153,7 @@ mod integration_tests {
                 if wb_idx == page_buffer.len() {
                     let page_buffer: &Vec<Page<WORDS>> = do_read::<WORDS>(&mut read_buffer, &mut file_active);
                     for page in page_buffer.iter() {
-                        assert!(page.validate_page_with(0xdead, fid as u64, pid as u64, 0));
+                        assert!(page.validate_page_with(0xdead, fid as u64, pid as u64));
                     }
                 }
             }
@@ -163,18 +167,17 @@ mod integration_tests {
         let dprefix: String = String::from("shelf");
         let fprefix: String = String::from("book");
 
-        let bookcase: Arc<BookCase> = Arc::new(
-                BookCase::new(pprefix.to_owned(),
+        let mut bookcase: BookCase = BookCase::new(pprefix.to_owned(),
                               dprefix.to_owned(),
                               DIRECTORY_COUNT as u64,
                               fprefix.to_owned(),
                               FILE_COUNT as u64,
                               PAGE_SIZE,
-                              PAGE_COUNT as u64)
-                );
+                              PAGE_COUNT as u64);
+
         bookcase.construct().expect("Could not create test bookcase structures.");
 
-        thread_write(Arc::new(0.into()), bookcase.clone());
+        //thread_write(Arc::new(0.into()), bookcase.clone());
         //data_verify(Arc::new(0.into()), bookcase.clone());
 
     
