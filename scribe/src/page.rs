@@ -74,6 +74,8 @@ pub struct Page<const W: usize> {
     mutations: u64,
     data: [u64; W]
 } impl<const W: usize> Page<W> {
+    const PAGE_SIZE: usize = W * 8 + METADATA_SIZE;
+
     #[allow(dead_code)]
     pub fn new(seed: u64, file: u64, page: u64) -> Page<W> {
         let data: [u64; W] = Page::generate_data(Page::<W>::assemble_seed(seed, file, page));

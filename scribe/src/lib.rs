@@ -1,7 +1,9 @@
 //mod scribe;
 pub mod page;
+pub mod chapter;
 pub mod bookcase;
 pub mod secretary;
+
 
 
 // Bookcase structure
@@ -51,7 +53,7 @@ mod integration_tests {
     };
     use std::{
         fs::File,
-        io:: {Write,Read},
+        io:: {/*Write,*/ Read},
         //thread,
         sync::Arc,
     };
