@@ -17,8 +17,9 @@ jobs:
     steps:
     - name: Install LibAio
       run: |
-        sudo apt-get install -y libaio1; \
-        dpkg -l | grep libaio            \
+        sudo apt-get install -y libaio1;    \
+        sudo apt-get install -y libaio-dev; \
+        dpkg -l | grep libaio               \
     - uses: actions/checkout@v3
     - name: Build project
       run: cargo build --workspace --verbose
