@@ -17,7 +17,7 @@ jobs:
     steps:
     - name: Install LibAio
       run: |
-        sudo apt-get install -y libaioi1 \
+        sudo apt-get install -y libaioi1; \
         dpkg -l | grep libaio            \
     - uses: actions/checkout@v3
     - name: Build project
