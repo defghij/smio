@@ -165,7 +165,7 @@ mod integration_tests {
     #[test]
     fn create_pages_from_queue() {
 
-        let pprefix: String = String::from("/home/chuck/programming/testing");
+        let pprefix: String = String::from("./testing");
         let dprefix: String = String::from("shelf");
         let fprefix: String = String::from("book");
 
