@@ -12,7 +12,7 @@ pub const PAGE_COUNT: usize      = 512;
 pub const PAGES_PER_WRITE: usize = 256;
 
 // Page Structure
-pub const DATA_SIZE: usize = PAGE_SIZE - page::METADATA_SIZE /*bytes*/;
+pub const DATA_SIZE: usize = PAGE_SIZE - page::Page::<0>::METADATA_BYTES /*bytes*/;
 pub const WORDS: usize     = DATA_SIZE / 8;  /*u64s*/
 
 pub type PageBytes = [u8; PAGE_SIZE];

@@ -1,13 +1,16 @@
 
-use super::page::{Page, METADATA_SIZE};
+use super::page::Page;
 
 /// Type that allows conversion between an array of Pages and Bytes.
+/// TODO: once `generic_const_ops` is stabilizes, remove the B generic parameter
+///     in lieu of something like
+///     PageOrBytes<P,W> wherein bytes has the type `[u8; {Page::<W>:PAGE_BYTES * P}]`
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub union PageOrBytes<const P: usize, const W: usize, const B: usize> { // P := PAGES
    pages: [Page<W>; P],
    bytes: [u8; B]
-} 
+}
 
 /// Allows the interaction with a collection (Array) of Pages as
 /// either Pages or Bytes. The functions on this type wrap unsafe 
@@ -16,12 +19,13 @@ pub union PageOrBytes<const P: usize, const W: usize, const B: usize> { // P := 
 ///  - P: Page count
 ///  - W: data words in a Page
 ///  - B: P * std::mem::size_of::<Page<W>>();
-///
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Chapter<const P: usize, const W: usize, const B: usize> (PageOrBytes<P,W,B>);
-
 impl<const P: usize, const W: usize, const B: usize> Chapter<P,W,B> {
+    pub const PAGES: usize = P;
+    pub const BYTES: usize = Page::<W>::PAGE_BYTES;
+
 
     #[allow(dead_code)]
     fn new() -> Chapter<P,W,B> {
@@ -65,8 +69,8 @@ impl<const P: usize, const W: usize, const B: usize> Chapter<P,W,B> {
 #[test]
 fn modify_pages_and_validate_bytes() {
     pub const SEED: u64  = 0xD7D6D5D4D3D2D1D0;
-    pub const FID: u64  = 0xC7C6C5C4C3C2C1C0;
-    pub const PID: u64  = 0xB7B6B5B4B3B2B1B0;
+    pub const FID: u64   = 0xC7C6C5C4C3C2C1C0;
+    pub const PID: u64   = 0xB7B6B5B4B3B2B1B0;
     pub const MUTS: u64  = 0x0000000000000000;
     let flat_tv  = vec![
         // Page One
@@ -86,8 +90,7 @@ fn modify_pages_and_validate_bytes() {
     // Single Page in Chaper
     const P: usize = 1;
     const W: usize = 1;
-    const PAGE_SIZE: usize = super::page::METADATA_SIZE + W * 8;
-    const B: usize = PAGE_SIZE * P;
+    const B: usize = Page::<W>::PAGE_BYTES * P;
 
     let mut chapter: Chapter<P,W,B> = Chapter::<P,W,B>::new();
 
@@ -99,7 +102,7 @@ fn modify_pages_and_validate_bytes() {
 
     // Two Page in a Chapter
     const P2: usize = 2;
-    const B2: usize = PAGE_SIZE * 2;
+    const B2: usize = Page::<W>::PAGE_BYTES * P2;
     let mut chapter: Chapter<P2,W,B2> = Chapter::<P2,W,B2>::new();
     chapter.mutable_pages()
            .iter_mut()

@@ -7,7 +7,6 @@ use bytemuck::{
     //try_from_bytes, bytes_of,
 };
 
-pub const METADATA_SIZE: usize = 32 /*bytes*/;
 
 #[allow(unused_macros)]
 macro_rules! assert_page_eq {
@@ -74,7 +73,12 @@ pub struct Page<const W: usize> {
     mutations: u64,
     data: [u64; W]
 } impl<const W: usize> Page<W> {
-    const PAGE_SIZE: usize = W * 8 + METADATA_SIZE;
+    pub const METADATA_WORDS: usize = 4;
+    pub const METADATA_BYTES: usize = Self::METADATA_WORDS * std::mem::size_of::<u64>();
+    pub const DATA_WORDS: usize = W;
+    pub const DATA_BYTES: usize = W * std::mem::size_of::<u64>();
+    pub const PAGE_WORDS: usize = Self::METADATA_WORDS + Self::DATA_WORDS;
+    pub const PAGE_BYTES: usize = Self::PAGE_WORDS * std::mem::size_of::<u64>();
 
     #[allow(dead_code)]
     pub fn new(seed: u64, file: u64, page: u64) -> Page<W> {
@@ -98,7 +102,6 @@ pub struct Page<const W: usize> {
         }
     }
 
-    
     ////////////////////////////////////////////////////
     //// Data Functions
 
@@ -262,6 +265,10 @@ fn general_functionality() {
     page.mutate_page(0);
     let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead+1, 0, 0));
     assert!(page.data == bytes, "mutate page failed");
+
+
+    assert!(Page::<0>::PAGE_BYTES == std::mem::size_of::<Page<0>>(), "{} != {}",Page::<0>::PAGE_BYTES, std::mem::size_of::<Page<0>>()) ;
+    assert!(Page::<4096>::PAGE_BYTES == std::mem::size_of::<Page<4096>>(), "{} != {}",Page::<4096>::PAGE_BYTES, std::mem::size_of::<Page<4096>>()) ;
 }
 
 
@@ -288,10 +295,7 @@ mod transmutation {
         fn single_page() {
             use super::{
                 S, F, P,
-                super::{
-                    Page,
-                    METADATA_SIZE,
-                }
+                super::Page
             };
             use bytemuck;
             let flat_tv: [u8; 40]  = [
@@ -302,7 +306,6 @@ mod transmutation {
                 0x84, 0x08, 0x08, 0x03, 0xC4, 0x3E, 0xDF, 0xAF,  //  data cont'd
             ];
             const W: usize = 1;
-            const PAGE_SIZE: usize = METADATA_SIZE + W * 8;
 
             // &Page<W> --> &[u8]
             let page: Page<W> = Page::new(S, F, P);
@@ -330,10 +333,7 @@ mod transmutation {
         fn two_pages() {
             use super::{
                 S, F, P,
-                super::{
-                    Page,
-                    METADATA_SIZE,
-                }
+                super::Page
             };
             let flat_tv  = vec![
                 // Page One
@@ -350,7 +350,6 @@ mod transmutation {
                 0xAB, 0x96, 0xF0, 0x6E, 0x6C, 0x81, 0x27, 0xD1,  //  data
             ];
             const W: usize = 1;
-            const PAGE_SIZE: usize = METADATA_SIZE + W * 8;
             const PAGES: usize = 2;
 
 
@@ -496,11 +495,13 @@ mod transmutation {
 
 
     mod to_and_from {
+        const W: usize = (512 / 8) - 4;
+        const PAGE_COUNT: usize = 64;
+
         #[test]
         fn random_page_bytes_array() {
             use super::super::{
                 Page,
-                METADATA_SIZE,
                 super::memory_ops::{
                     to_byte_slice,
                     from_byte_slice
@@ -509,9 +510,7 @@ mod transmutation {
             use rand::prelude::*;
             use array_init::array_init;
 
-            const PAGE_SIZE: usize = 512;
             const PAGE_COUNT: usize = 64;
-            const W: usize = (PAGE_SIZE - (METADATA_SIZE)) / 8;
 
             let mut rng: ThreadRng = rand::thread_rng();
 
@@ -519,7 +518,7 @@ mod transmutation {
             let file: u64 = rng.gen();
 
             let pages: [Page<W>; PAGE_COUNT] = array_init(|i: usize| Page::new(seed, file, i as u64));
-            let pages_bytes: &[u8; PAGE_COUNT * PAGE_SIZE] = to_byte_slice(&pages);
+            let pages_bytes: &[u8; PAGE_COUNT * std::mem::size_of::<Page<W>>()] = to_byte_slice(&pages);
 
             let pages: &[Page<W>; PAGE_COUNT] = from_byte_slice(pages_bytes).expect("Could not transmute page!");
 
@@ -530,16 +529,9 @@ mod transmutation {
 
         #[test]
         fn random_page_bytes_vec() {
-            use super::super::{
-                Page,
-                METADATA_SIZE,
-            };
+            use super::super::Page;
             use rand::prelude::*;
-            //use array_init::array_init;
 
-            const PAGE_SIZE: usize = 512;
-            const PAGE_COUNT: usize = 64;
-            const W: usize = (PAGE_SIZE - (METADATA_SIZE)) / 8;
 
             let mut rng: ThreadRng = rand::thread_rng();
 
@@ -557,19 +549,13 @@ mod transmutation {
         }
         #[test]
         fn vec_writes_and_reads() {
-            use super::super::{
-                Page,
-                METADATA_SIZE,
-            };
+            use super::super::Page;
             use rand::prelude::*;
             use std::{
                 fs::File,
                 io::Write,
             };
 
-            const PAGE_SIZE: usize = 512;
-            const PAGE_COUNT: usize = 64;
-            const W: usize = (PAGE_SIZE - (METADATA_SIZE)) / 8;
             let tmpfile_name: String = String::from("test.page.serde");
             let mut tmpfile: File = File::create(tmpfile_name.clone()).expect("Was not able to create temporary file!");
 
@@ -593,9 +579,9 @@ mod transmutation {
             drop(tmpfile); // Let OS/Rust reap this file descriptor.
         
             let read_buffer: Vec<u8> =  std::fs::read(tmpfile_name.clone()).expect("Could not read file");
-            if read_buffer.len() != PAGE_SIZE * PAGE_COUNT {
+            if read_buffer.len() != Page::<W>::PAGE_BYTES * PAGE_COUNT {
                 std::fs::remove_file(tmpfile_name.clone()).expect("Unable to remove temporary testing file");
-                assert!(read_buffer.len() == PAGE_SIZE * PAGE_COUNT, "Read {} of {} bytes", read_buffer.len(), PAGE_SIZE * PAGE_COUNT);
+                assert!(read_buffer.len() == Page::<W>::PAGE_BYTES * PAGE_COUNT, "Read {} of {} bytes", read_buffer.len(), Page::<W>::PAGE_BYTES * PAGE_COUNT);
             }
 
             let pages_w: &[Page<W>; PAGE_COUNT] = bytemuck::try_from_bytes::<[Page<W>; PAGE_COUNT]>(&read_buffer.as_slice())
