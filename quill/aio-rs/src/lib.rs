@@ -38,6 +38,52 @@ pub mod aio{
     };
     use std::{fmt, time::Duration};
 
+    #[derive(Debug, Copy, Clone)]
+    pub struct AioContext(aio_context_t);
+    impl AioContext {
+
+        pub fn new(max_events: u32) -> AioContext {
+            let mut aio = AioContext(0);
+            match aio_setup(max_events, &mut aio).is_ok() {
+                true => aio,
+                false => AioContext(0)
+            }
+        }
+
+        pub fn destroy(&mut self) {
+            aio_destroy(self).unwrap()
+        }
+        
+        pub fn submit(self, requests: &mut [AioRequest]) -> Result<i32, AioSysError> {
+            let result = aio_submit(self, requests);
+            result
+        }
+        
+        fn cancel(self, request: AioRequest) -> Result<AioRequest, AioSysError> {
+            aio_cancel(self, request)
+        }
+
+        pub fn get_events(self, events: &mut [AioEvent]) -> Result<i32, AioSysError> {
+            aio_getevents(self, events) 
+        }
+        
+        pub fn get_events_with_timeout(self, events: &mut [AioEvent], timeout: Duration) -> Result<i32, AioSysError> {
+            aio_getevents_with_timeout(self, events, timeout: Duration)
+        }
+
+        /// Returns the validity of the context. Invalid may also mean uninitialized.
+        pub fn is_valid(self) -> bool {
+            self.0 != 0
+        }
+
+        fn inner(self) -> aio_context_t {
+            self.0
+        }
+        fn inner_mut<'a>(&'a mut self) -> &'a mut aio_context_t {
+            &mut self.0
+        }
+    }
+
     /// Creates an asynchrnous I/O context
     ///
     /// # Arguments
@@ -60,7 +106,7 @@ pub mod aio{
     /// if ret.is_err() { panic!("Failed with error: {}", ret.unwrap()); }
     /// assert!(ctx.is_valid(), "Failed to set context to nonzero value!");
     /// ```
-    pub fn aio_setup(max_events: u32, ctx: &mut AioContext) -> Result<i32, AioSysError> { 
+    fn aio_setup(max_events: u32, ctx: &mut AioContext) -> Result<i32, AioSysError> { 
         let ret: i32;
         let ctxp = ctx.inner_mut() as *mut u64;
         unsafe {
@@ -98,7 +144,7 @@ pub mod aio{
     /// if ret.is_err() { panic!("Failed to destory context: {}", ret.unwrap_err()); }
     /// assert!(!ctx.is_valid(), "Failed to set destroyed context value to zero!");
     /// ```
-    pub fn aio_destroy(ctx: &mut AioContext) -> Result<(), AioSysError> { 
+    fn aio_destroy(ctx: &mut AioContext) -> Result<(), AioSysError> { 
         let ret: i32;
         unsafe {
             ret = io_destroy(ctx.inner());
@@ -160,7 +206,7 @@ pub mod aio{
     /// # let submitted = ret.unwrap();
     /// # assert!(submitted == 1, "Failed to submit iocb!");
     /// ```
-    pub fn aio_submit(ctx: AioContext, requests: &mut [AioRequest]) -> Result<i32, AioSysError> {
+    fn aio_submit(ctx: AioContext, requests: &mut [AioRequest]) -> Result<i32, AioSysError> {
         let ret: i32;
         let number_of_requests: i64 = requests.len().try_into().unwrap(); 
         unsafe {
@@ -178,7 +224,7 @@ pub mod aio{
     }
    
     /// Attempts to read up to `events.len()` from the completion queue for the provided `ctx`. The
-    /// minimum number of requests returned is 1, will block or timeout to do do, and the maximum 
+    /// minimum number of requests returned is 1, will block or timeout, and the maximum 
     /// number of requests returned is `events.len()` up to the queue depth limits if the runtime
     /// set at `aio_setup`. There is an implicit timeout of 100ns.
     ///
@@ -239,7 +285,7 @@ pub mod aio{
     /// #     if *a != b'A' { panic!("Invalid element found in read buffer"); }
     /// # });
     /// ```
-    pub fn aio_getevents(ctx: AioContext, events: &mut [AioEvent]) -> Result<i32, AioSysError> { 
+    fn aio_getevents(ctx: AioContext, events: &mut [AioEvent]) -> Result<i32, AioSysError> { 
         let ret: i32; 
         let min_req: i64 = 1;
         let max_req: i64 = events.len() as i64;
@@ -305,7 +351,7 @@ pub mod aio{
     /// let result = aio_cancel(ctx, request);
     /// if result.is_err() { panic!("Failed to cancel request!"); }
     /// ```
-    pub fn aio_cancel(ctx: AioContext, mut request: AioRequest) -> Result<AioRequest, AioSysError> { 
+    fn aio_cancel(ctx: AioContext, mut request: AioRequest) -> Result<AioRequest, AioSysError> { 
         let ret: i32;
 
         unsafe {
@@ -393,7 +439,7 @@ pub mod aio{
     /// #     }
     /// # });
     /// ```
-    pub fn aio_getevents_with_timeout(ctx: AioContext,
+    fn aio_getevents_with_timeout(ctx: AioContext,
                                       events: &mut [AioEvent],
                                       timeout: Duration) -> Result<i32, AioSysError> { 
         let ret: i32; 
@@ -414,24 +460,6 @@ pub mod aio{
     }
 
 
-    #[derive(Debug, Copy, Clone)]
-    pub struct AioContext(aio_context_t);
-    impl AioContext {
-        /// Creates a new context which can be passed to `aio_submit`.
-        pub fn new () -> AioContext {
-            AioContext(0)
-        }
-        /// Returns the validity of the context. Invalid may also mean uninitialized.
-        pub fn is_valid(self) -> bool {
-            self.0 != 0
-        }
-        fn inner(self) -> aio_context_t {
-            self.0
-        }
-        fn inner_mut<'a>(&'a mut self) -> &'a mut aio_context_t {
-            &mut self.0
-        }
-    }
 
     #[repr(C)]
     #[derive(Debug, Copy, Clone)]
