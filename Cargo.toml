@@ -12,6 +12,7 @@ clap = "4.4.6"
 [workspace]
 members = [
     "scribe",
-    "aio-sys",
-    "aio-rs",
+    "quill",
+    "quill/aio-rs",
+    "quill/aio-sys",
 ]

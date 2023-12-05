@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 
 # Local dependencies
-aio-rs = { path = "../aio-rs" }
+aio-rs = { path = "../quill/aio-rs" }
 
 # External Dependencies
 ## Functional
