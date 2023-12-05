@@ -7,7 +7,7 @@ use super::page::Page;
 ///     PageOrBytes<P,W> wherein bytes has the type `[u8; {Page::<W>:PAGE_BYTES * P}]`
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub union PageOrBytes<const P: usize, const W: usize, const B: usize> { // P := PAGES
+union PageOrBytes<const P: usize, const W: usize, const B: usize> { // P := PAGES
    pages: [Page<W>; P],
    bytes: [u8; B]
 }
@@ -16,9 +16,9 @@ pub union PageOrBytes<const P: usize, const W: usize, const B: usize> { // P := 
 /// either Pages or Bytes. The functions on this type wrap unsafe 
 /// union accesses.
 /// Constant Generic Arguments:
-///  - P: Page count
-///  - W: data words in a Page
-///  - B: P * std::mem::size_of::<Page<W>>();
+/// * P: Page count
+/// * W: data words in a Page
+/// * B: Value should be P x std::mem::size_of::<Page<W>>();
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Chapter<const P: usize, const W: usize, const B: usize> (PageOrBytes<P,W,B>);

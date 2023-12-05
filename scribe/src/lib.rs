@@ -30,8 +30,7 @@ pub mod memory_ops {
     }
     pub fn from_byte_slice<'a, T>(slice: &[u8]) -> Option<&T> {
         if slice.len() != std::mem::size_of::<T>() {
-            println!("Memory sizes incompatible: {} != {}", slice.len(), std::mem::size_of::<T>());
-            return None;
+            panic!("Memory sizes incompatible: {} != {}", slice.len(), std::mem::size_of::<T>());
         }
         let ptr = slice.as_ptr() as *const T;
         Some(unsafe {&*ptr })
@@ -42,7 +41,6 @@ pub mod memory_ops {
 mod integration_tests {
     use super::{
         WORDS,PAGES_PER_WRITE, PAGE_SIZE, PAGE_COUNT,
-        //memory_ops,
         secretary::scheduler::{
             WorkUnit,
             WorkQueueIterator,
@@ -54,7 +52,6 @@ mod integration_tests {
     use std::{
         fs::File,
         io:: {/*Write,*/ Read},
-        //thread,
         sync::Arc,
     };
 

@@ -63,7 +63,32 @@ macro_rules! assert_page_eq {
  *  Page<PAGE_SIZE_IN_BYTES> which implies
  *      page.data has type [u64; (PAGE_SIZE_IN_BYTES / 64) - (METADATA_SIZE / 64)];
  *  ```
- */ 
+ */
+/// A structure to ecapsulate meta data and data derived there from. Metadata
+/// is used to create a seed which is feed to a hashing function to generate
+/// data. All elements are 8-byte aligned. Meta data can be mutated at which
+/// point the data is updated accordingly.
+///
+/// # Metadata
+/// Metadata determines the bytes contained in data. Metadata fields are as follows:
+/// - seed: Base seed used for pages across entire application. 
+/// - file: File in which this Page resides.
+/// - page: The Page index into the file that refers to this instance.
+/// - mutations: How many times this page has been mutated.
+///
+/// The four fields above result in a single final seed.
+///
+/// # Data
+/// Data is generated using Xoroshiro128PlusPlus hashing function. The seed is
+/// derived from the meta_data fields and the function is iterated to generate
+/// the required number of words. Data contains `const W:usize` u64 words.
+///
+/// # Usage
+/// This type is meant to be single, referable, data unit written to a file.
+/// The position in file (page) and among files (file) as well as the base 
+/// seed (seed) and how many times the Page has been altered create a
+/// deterministic, pseudo-random, data which can be written to and read from
+/// the file system.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Page<const W: usize> {
@@ -80,6 +105,7 @@ pub struct Page<const W: usize> {
     pub const PAGE_WORDS: usize = Self::METADATA_WORDS + Self::DATA_WORDS;
     pub const PAGE_BYTES: usize = Self::PAGE_WORDS * std::mem::size_of::<u64>();
 
+    /// Creates a new, populated, instace of Page.
     #[allow(dead_code)]
     pub fn new(seed: u64, file: u64, page: u64) -> Page<W> {
         let data: [u64; W] = Page::generate_data(Page::<W>::assemble_seed(seed, file, page));
@@ -92,6 +118,7 @@ pub struct Page<const W: usize> {
         }
     }
 
+    /// Creates an empty, zeroed, Page.
     pub fn default() -> Page<W> {
         Page::<W> {
             file: 0,
@@ -106,6 +133,8 @@ pub struct Page<const W: usize> {
     //// Data Functions
 
     /// TODO: Why does this function require a generic argument?
+    /// Combine seed elements into a final seed suitable for passing to
+    /// `self.generate_data` function.
     fn assemble_seed(seed: u64, file: u64, page: u64) -> u64 {
         let seed_page: u64 = page << 32;   
         let seed_file: u64 = !(file) << 46;
@@ -114,7 +143,8 @@ pub struct Page<const W: usize> {
         let seed: u64 = seed_upper | seed_lower;
         seed
     }
-    
+   
+    /// Invokes the hash function to generate data for Page.
     fn generate_data(seed: u64) -> [u64; W] {
         let mut rng = Xoroshiro128PlusPlus::seed_from_u64(seed);
         let data: [u64; W] = {
@@ -127,6 +157,9 @@ pub struct Page<const W: usize> {
         data
     }
 
+    /// Will return true if supplied arguments result in data that is consistent 
+    /// with self.data. This function will generate data from supplied arguments
+    /// and compare to state of self.
     pub fn validate_page_with(self, seed: u64, file: u64, page: u64) -> bool {
         let data: [u64; W] = Page::generate_data(Page::<W>::assemble_seed(seed, file, page));
         data == self.data
@@ -134,6 +167,8 @@ pub struct Page<const W: usize> {
 
     ////////////////////////////////////////////////////
     //// Mutatate/Transmute Functions
+
+    /// Reinitialize the page. This function alters all parts of the Page metadata.
     #[allow(dead_code)]
     pub fn reinit(&mut self, seed: u64, file: u64, page: u64, mutations: u64) -> &Self {
         self.seed = seed;
@@ -144,6 +179,7 @@ pub struct Page<const W: usize> {
         self
     }
 
+    /// Advance mutation count by one. This generates new page data.
     #[allow(dead_code)]
     pub fn mutate_seed(&mut self) -> &Self {
         self.seed += 1;
@@ -153,6 +189,7 @@ pub struct Page<const W: usize> {
         self
     }
 
+    /// Alter the file meta data field. This generates new page data.
     #[allow(dead_code)]
     pub fn mutate_file(&mut self, file: u64) -> &Self {
         self.file = file;
@@ -161,6 +198,7 @@ pub struct Page<const W: usize> {
         self
     }
 
+    /// Alter the page meta data field. This generates new data.
     #[allow(dead_code)]
     pub fn mutate_page(&mut self, page: u64) -> &Self {
         self.page = page;
