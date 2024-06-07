@@ -64,8 +64,8 @@ macro_rules! assert_page_eq {
  *      page.data has type [u64; (PAGE_SIZE_IN_BYTES / 64) - (METADATA_SIZE / 64)];
  *  ```
  */
-/// A structure to ecapsulate meta data and data derived there from. Metadata
-/// is used to create a seed which is feed to a hashing function to generate
+/// A structure to ecapsulate meta-data and data derived there from. Metadata
+/// is used to create a seed which is fed to a hashing function to generate
 /// data. All elements are 8-byte aligned. Meta data can be mutated at which
 /// point the data is updated accordingly.
 ///
@@ -76,7 +76,7 @@ macro_rules! assert_page_eq {
 /// - page: The Page index into the file that refers to this instance.
 /// - mutations: How many times this page has been mutated.
 ///
-/// The four fields above result in a single final seed.
+/// The four fields above result in a single, final, seed.
 ///
 /// # Data
 /// Data is generated using Xoroshiro128PlusPlus hashing function. The seed is
@@ -89,7 +89,7 @@ macro_rules! assert_page_eq {
 /// seed (seed) and how many times the Page has been altered create a
 /// deterministic, pseudo-random, data which can be written to and read from
 /// the file system.
-#[repr(C)]
+#[repr(C, align(8))]
 #[derive(Debug, Copy, Clone)]
 pub struct Page<const W: usize> {
     seed: u64,
@@ -132,7 +132,6 @@ pub struct Page<const W: usize> {
     ////////////////////////////////////////////////////
     //// Data Functions
 
-    /// TODO: Why does this function require a generic argument?
     /// Combine seed elements into a final seed suitable for passing to
     /// `self.generate_data` function.
     fn assemble_seed(seed: u64, file: u64, page: u64) -> u64 {
@@ -169,6 +168,7 @@ pub struct Page<const W: usize> {
     //// Mutatate/Transmute Functions
 
     /// Reinitialize the page. This function alters all parts of the Page metadata.
+    /// This is the same as creating a new page except `mutations` must be provided.
     #[allow(dead_code)]
     pub fn reinit(&mut self, seed: u64, file: u64, page: u64, mutations: u64) -> &Self {
         self.seed = seed;
@@ -209,6 +209,8 @@ pub struct Page<const W: usize> {
 }
 
 impl<const W:usize> PartialEq for Page<W> {
+    /// Field by field equality test for the `Page<W>` type. Dependent
+    /// on equality of all fields of the data type.
     fn eq(&self, other: &Self) -> bool {
         if self.seed != other.seed { return false; }
         if self.file != other.file { return false; }
@@ -219,7 +221,7 @@ impl<const W:usize> PartialEq for Page<W> {
     }
 }
 
-/// &Page<W> --> &[u8]
+/// `&Page<W>` --> `&[u8]`
 impl<'a,const W:usize> TryFrom<&'a Page<W>> for &'a [u8] {
     type Error = bytemuck::PodCastError;
     fn try_from(value: &'a Page<W>) -> Result<Self, Self::Error> {
@@ -337,32 +339,33 @@ mod transmutation {
             };
             use bytemuck;
             let flat_tv: [u8; 40]  = [
+            //  b00   b01   b02   b03   b04   b05   b06   b07 
                 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,  // seed
                 0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,  // file
                 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7,  // page
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // mutations
-                0x84, 0x08, 0x08, 0x03, 0xC4, 0x3E, 0xDF, 0xAF,  //  data cont'd
+                0x84, 0x08, 0x08, 0x03, 0xC4, 0x3E, 0xDF, 0xAF,  // data
             ];
             const W: usize = 1;
 
-            // &Page<W> --> &[u8]
+            // `&Page<W>` --> `&[u8]`
             let page: Page<W> = Page::new(S, F, P);
             let bytes: &[u8] = bytemuck::bytes_of(&page);
             assert!(&flat_tv == bytes);
 
-            // Box<Page<W>> --> &[u8]
+            // `Box<Page<W>>` --> `&[u8]`
             let page: Page<W> = Page::new(S, F, P);
             let page_box: Box<Page<W>> = Box::new(page);
             let bytes: &[u8] = bytemuck::bytes_of(page_box.as_ref());
             assert!(&flat_tv == bytes.as_ref());
 
-            // test that the pointers for Box<Page<W>> --> &[u8] are the same.
+            // test that the pointers for `Box<Page<W>>` --> `&[u8]` are the same.
             let page_box_ptr: *const Page<W> = &*page_box;
             let bytes_ptr: *const [u8] = &*bytes;
             assert!(format!("{page_box_ptr:?}") == format!("{bytes_ptr:?}"), "Pointers are not equal: {page_box_ptr:?} != {bytes_ptr:?}");
            
 
-            // Box<Page<W>> --> &[u8]
+            // `Box<Page<W>>` --> `&[u8]`
             let bytes: &[u8] = page_box.as_ref().try_into().expect("Unable to convert");
             assert!(&flat_tv == bytes);
         }
@@ -374,24 +377,26 @@ mod transmutation {
                 super::Page
             };
             let flat_tv  = vec![
-                // Page One
+            // Page One
+            //  b00   b01   b02   b03   b04   b05   b06   b07 
                 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,  // seed
                 0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,  // file
                 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7,  // page
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // mutations
                 0x84, 0x08, 0x08, 0x03, 0xC4, 0x3E, 0xDF, 0xAF,  //  data
-                // Page Two
+            // Page Two
+            //  b00   b01   b02   b03   b04   b05   b06   b07 
                 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,  // seed
                 0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,  // file
                 0xB1, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7,  // page
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // mutations
-                0xAB, 0x96, 0xF0, 0x6E, 0x6C, 0x81, 0x27, 0xD1,  //  data
+                0xAB, 0x96, 0xF0, 0x6E, 0x6C, 0x81, 0x27, 0xD1,  // data
             ];
             const W: usize = 1;
             const PAGES: usize = 2;
 
 
-            // &[Page<Words>; 2] --> &[u8]
+            // `&[Page<Words>; 2]` --> `&[u8]`
             let page1: Page<W> = Page::new(S, F, P);
             let page2: Page<W> = Page::new(S, F, P + 1);
             let pages: [Page<W>; 2] = [page1, page2];
@@ -400,7 +405,7 @@ mod transmutation {
             assert!(flat_tv == bytes);
 
             
-            // [Page<W>; PAGES] --> Vec<u8>
+            // `[Page<W>; PAGES]` --> `Vec<u8>`
             let bytes: Vec<u8> = pages.iter().flat_map(|p| {
                 let bytes: &[u8] = p.try_into().expect("Unable to convert");
                 bytes.to_vec()
@@ -408,7 +413,7 @@ mod transmutation {
             assert!(flat_tv == bytes);
 
 
-            // Box<[Page<W>]> --> &[u8]
+            // `Box<[Page<W>]>` --> `&[u8]`
             let pages: Box<[Page<W>]> = Box::new([
                 Page::new(S, F, P), Page::new(S, F, P+1)
             ]);
@@ -416,7 +421,7 @@ mod transmutation {
             assert!(flat_tv == bytes);
             
 
-            // Vec<Page<W>> --> Vec<u8>
+            // `Vec<Page<W>>` --> `Vec<u8>`
             let mut pages: Vec<Page<W>> = Vec::with_capacity(PAGES);
             pages.push(Page::new(S, F, P));
             pages.push(Page::new(S, F, P+1));
@@ -431,7 +436,7 @@ mod transmutation {
                                       .collect();
             assert!(flat_tv == bytes);
             
-            // Vec<Page<W>> --> Vec<u8>
+            // `Vec<Page<W>>` --> `Vec<u8>`
             let bytes: Vec<u8> = pages.into_iter()
                                       .map(|p |{ <&Page<W> as TryInto<&[u8]>>::try_into(&p).expect("Unable to convert").to_vec() })
                                       .flatten()
@@ -448,11 +453,12 @@ mod transmutation {
                 super::Page
             };
             let flat_tv: [u8; 40]  = [
+            //  b00   b01   b02   b03   b04   b05   b06   b07 
                 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,  // seed
                 0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,  // file
                 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7,  // page
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // mutations
-                0x84, 0x08, 0x08, 0x03, 0xC4, 0x3E, 0xDF, 0xAF,  //  data cont'd
+                0x84, 0x08, 0x08, 0x03, 0xC4, 0x3E, 0xDF, 0xAF,  // data
             ];
             const W: usize = 1;
             let page_tv: Page<W> = Page::new(S, F, P);
@@ -483,13 +489,15 @@ mod transmutation {
                 super::Page
             };
             let flat_tv  = vec![
-                // Page One
+            // Page One
+            //  b00   b01   b02   b03   b04   b05   b06   b07 
                 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,  // seed
                 0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,  // file
                 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7,  // page
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // mutations
                 0x84, 0x08, 0x08, 0x03, 0xC4, 0x3E, 0xDF, 0xAF,  //  data
-                // Page Two
+            // Page Two
+            //  b00   b01   b02   b03   b04   b05   b06   b07 
                 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,  // seed
                 0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,  // file
                 0xB1, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7,  // page

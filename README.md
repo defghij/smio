@@ -19,6 +19,13 @@ Ideally, this benchmark will make use of different methods of file system IO:
 - libaio
 - io_uring
 
+# Types
+
+The types of this project are layered to facilitate the layer of interaction at which they are expected to be used:
+- `page`: Fundamental data type. A 'single unit' of a read and write. This is the level of data integrity and validation.
+- `chapter`: A collection of pages suitable for serialization and batch reading and writing.
+- `book`: A collection of chapters (i.e. a file). Writes/Reads are to/from a book if the size of a chapter.
+- `bookcase`: A collection of books that comprise corpus of benchmark data (i.e. directories)
 
 # Development Plan
 

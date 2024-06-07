@@ -19,6 +19,11 @@ union PageOrBytes<const P: usize, const W: usize, const B: usize> { // P := PAGE
 /// * P: Page count
 /// * W: data words in a Page
 /// * B: Value should be P x std::mem::size_of::<Page<W>>();
+/// TODO: 
+///     - Utility functions should return an Some type.
+///     - Test whether there is a performance impact of using a slice 
+///       and the page's to/from traits vs the union type.
+///
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Chapter<const P: usize, const W: usize, const B: usize> (PageOrBytes<P,W,B>);

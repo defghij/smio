@@ -5,6 +5,14 @@ pub mod scheduler {
 
     /// X = PAGES
     /// Y = FILES
+    /// The basis of this scheduler or work queue is a grid. This is intended
+    /// to map to files and pages. That is if we have 3 files each with 8 pages
+    /// then we have a 8x3 grid. Thus, a `WorkUnit` refers to a specific file 
+    /// and page to operate on. 
+    /// TODO: 
+    ///     - First: is this even needed? could I just use Rayon or some other parallelism library?
+    ///     - Implement a difference operator for `WorkUnit`s to get the total amount of work
+    ///         pulled from the queue.
 
     #[allow(dead_code)]
     #[inline(always)]
@@ -502,6 +510,59 @@ pub mod scheduler {
                 let counter: u64 = counter.load(Ordering::SeqCst);
                 let threads: u64 = threads.load(Ordering::SeqCst);
                 assert!(counter == 2, "{} ? {}", counter, 2);
+                assert!(threads == 4, "{} ? {}", threads, 4);
+            }
+
+
+            #[test]
+            fn grid32x8_step1_threads4() {
+                use super::super::{WorkUnit, WorkQueueIterator};
+                use std::thread;
+                use std::sync::{
+                    Arc, atomic::{
+                        AtomicU64,
+                        Ordering
+                    }
+                };
+                const X: usize = 32;
+                const Y: usize = 8;
+                let mut handles = vec![];
+                let q: WorkQueueIterator<X,Y,1> = 0.into();
+                let queue: Arc<WorkQueueIterator<X,Y,1>> = Arc::new(q);
+                let counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+                let threads: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+
+                for _ in 0..4 {
+                    let thread_queue = queue.clone();
+                    let thread_counter = counter.clone();
+                    let threads_total = threads.clone();
+
+                    let handle = thread::spawn(move || {
+                        threads_total.fetch_add(1, Ordering::SeqCst);
+
+                        while let Some(work) = thread_queue.next() {
+                            let start: WorkUnit = work.0;
+                            let end: WorkUnit = work.1;
+                            let x0: u64 = start.0.1;
+                            let y0: u64 = start.0.0;
+                            let x1: u64 = end.0.1;
+                            let y1: u64 = end.0.0;
+
+                            // TODO: only increment thread work counter only
+                            // for the work units pulled off the queue
+                            thread_counter.fetch_add(1, Ordering::SeqCst);
+                        }
+                    });
+                    handles.push(handle);
+                }
+
+                for handle in handles {
+                    handle.join().unwrap();
+                }
+            
+                let counter: u64 = counter.load(Ordering::SeqCst);
+                let threads: u64 = threads.load(Ordering::SeqCst);
+                assert!(counter == 32 * 8, "{} ? {}", counter, 32 * 8);
                 assert!(threads == 4, "{} ? {}", threads, 4);
             }
         }
