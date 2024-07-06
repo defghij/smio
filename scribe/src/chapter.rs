@@ -33,23 +33,38 @@ impl<const P: usize, const W: usize, const B: usize> Chapter<P,W,B> {
 
 
     #[allow(dead_code)]
-    fn new() -> Chapter<P,W,B> {
+    pub fn new() -> Chapter<P,W,B> {
         Chapter(PageOrBytes::<P,W,B> { bytes: [0; B] })
     }
 
-    #[allow(dead_code)]
-    fn bytes(&self) -> &[u8] {
-        unsafe { &self.0.bytes }
+    pub fn zeroize(&mut self) {
+        unsafe { let _ = &self.0.bytes.fill_with(Default::default); }
     }
 
     #[allow(dead_code)]
-    fn mutable_bytes(&mut self) -> &mut [u8] {
+    pub fn bytes_all(&self) -> &[u8] {
+        unsafe { &self.0.bytes }
+    }
+
+    pub fn bytes_upto(&self, upper_bound: usize) -> &[u8] {
+        debug_assert!(upper_bound <= Page::<W>::PAGE_BYTES * P, "Attempted to get more pages than available!");
+        unsafe { &self.0.bytes[0..upper_bound] }
+    }
+
+    #[allow(dead_code)]
+    pub fn mutable_bytes_all(&mut self) -> &mut [u8] {
         unsafe { &mut self.0.bytes }
     }
-    
+
     #[allow(dead_code)]
-    fn pages(&self) -> &[Page<W>] {
+    pub fn pages_all(&self) -> &[Page<W>] {
         unsafe { &self.0.pages }
+    }
+
+    #[allow(dead_code)]
+    fn pages_upto(&self, upper_bound: usize) -> &[Page<W>] {
+        debug_assert!(upper_bound <= P, "Attempted to get more pages than available!");
+        unsafe { &self.0.pages[0..upper_bound] }
     }
 
     #[allow(dead_code)]
@@ -58,13 +73,13 @@ impl<const P: usize, const W: usize, const B: usize> Chapter<P,W,B> {
     }
 
     #[allow(dead_code)]
-    fn single_page(&self, p: u64) -> &Page<W> {
+    pub fn page(&self, p: u64) -> &Page<W> {
         assert!(p < P as u64, "Attempted to pull page {} out of a chapter of length {}", p, P);
         unsafe { &self.0.pages[p as usize] }
     }
 
     #[allow(dead_code)]
-    fn single_mutable_page(&mut self, p: u64) -> &mut Page<W> {
+    pub fn mutable_page(&mut self, p: u64) -> &mut Page<W> {
         assert!(p < P as u64, "Attempted to pull page {} out of a chapter of length {}", p, P);
         unsafe { &mut self.0.pages[p as usize] }
     }
@@ -99,10 +114,10 @@ fn modify_pages_and_validate_bytes() {
 
     let mut chapter: Chapter<P,W,B> = Chapter::<P,W,B>::new();
 
-    chapter.single_mutable_page(0)
+    chapter.mutable_page(0)
            .reinit(SEED,FID, PID, MUTS);
 
-    assert!(flat_tv[0..B] == *chapter.bytes());
+    assert!(flat_tv[0..B] == *chapter.bytes_all());
    
 
     // Two Page in a Chapter
@@ -114,5 +129,5 @@ fn modify_pages_and_validate_bytes() {
            .enumerate()
            .for_each(|(i,page):(usize, &mut Page<W>)| { page.reinit(SEED, FID, PID + (i as u64), MUTS); });
 
-    assert!(flat_tv == chapter.bytes());
+    assert!(flat_tv == chapter.bytes_all());
 }

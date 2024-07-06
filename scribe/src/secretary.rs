@@ -1,7 +1,5 @@
 pub mod scheduler { 
-    use std::sync::{
-        atomic::{Ordering, AtomicU64}
-    };
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     /// X = PAGES
     /// Y = FILES
@@ -543,10 +541,10 @@ pub mod scheduler {
                         while let Some(work) = thread_queue.next() {
                             let start: WorkUnit = work.0;
                             let end: WorkUnit = work.1;
-                            let x0: u64 = start.0.1;
-                            let y0: u64 = start.0.0;
-                            let x1: u64 = end.0.1;
-                            let y1: u64 = end.0.0;
+                            let _x0: u64 = start.0.1;
+                            let _y0: u64 = start.0.0;
+                            let _x1: u64 = end.0.1;
+                            let _y1: u64 = end.0.0;
 
                             // TODO: only increment thread work counter only
                             // for the work units pulled off the queue

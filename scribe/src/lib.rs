@@ -9,7 +9,7 @@ pub mod secretary;
 // Bookcase structure
 pub const PAGE_SIZE: usize       = 4096 /*bytes*/;
 pub const PAGE_COUNT: usize      = 512;
-pub const PAGES_PER_WRITE: usize = 256;
+pub const PAGES_PER_CHAPTER: usize = 256;
 
 // Page Structure
 pub const DATA_SIZE: usize = PAGE_SIZE - page::Page::<0>::METADATA_BYTES /*bytes*/;
@@ -40,7 +40,7 @@ pub mod memory_ops {
 #[cfg(test)]
 mod integration_tests {
     use super::{
-        WORDS,PAGES_PER_WRITE, PAGE_SIZE, PAGE_COUNT,
+        WORDS,PAGES_PER_CHAPTER, PAGE_SIZE, PAGE_COUNT,
         secretary::scheduler::{
             WorkUnit,
             WorkQueueIterator,
@@ -57,7 +57,7 @@ mod integration_tests {
 
     const DIRECTORY_COUNT: usize = 2;
     const FILE_COUNT: usize = 2;
-    type WorkerQueue = Arc<WorkQueueIterator<PAGE_COUNT,FILE_COUNT,PAGES_PER_WRITE>>;
+    type WorkerQueue = Arc<WorkQueueIterator<PAGE_COUNT,FILE_COUNT,PAGES_PER_CHAPTER>>;
     type WorkIterator = WorkUnitIterator<PAGE_COUNT,FILE_COUNT>;
 
     /*
@@ -69,7 +69,7 @@ mod integration_tests {
     #[allow(dead_code)]
     fn do_read<'a, const N: usize>(buffer: &'a mut Vec<u8>, file: &mut File) -> &'a Vec<Page<WORDS>> {
         
-        let _ = file.read_exact(vec![0; PAGES_PER_WRITE * PAGE_SIZE].as_mut_slice());
+        let _ = file.read_exact(vec![0; PAGES_PER_CHAPTER * PAGE_SIZE].as_mut_slice());
         let page_buffer: &Vec<Page<WORDS>> = super::memory_ops::from_byte_slice(buffer).expect("Could not transmute page!");
         page_buffer
     }
@@ -116,8 +116,8 @@ mod integration_tests {
     #[allow(dead_code)]
     fn data_verify(queue: WorkerQueue, bookcase: Arc<BookCase>) {
         while let Some(range) = queue.next() {
-            let mut page_buffer: Vec<Page<WORDS>> = vec![Page::default(); PAGES_PER_WRITE];
-            let mut read_buffer: Vec<u8> = vec![0; PAGES_PER_WRITE * PAGE_SIZE]; 
+            let mut page_buffer: Vec<Page<WORDS>> = vec![Page::default(); PAGES_PER_CHAPTER];
+            let mut read_buffer: Vec<u8> = vec![0; PAGES_PER_CHAPTER * PAGE_SIZE]; 
             let mut wb_idx: usize = 0;
 
             let start: WorkUnit = range.0;
@@ -137,7 +137,7 @@ mod integration_tests {
                     // Complete any outstanding writes for this file
                     let page_buffer: &Vec<Page<WORDS>> = do_read::<WORDS>(&mut read_buffer, &mut file_active);
                     for page in page_buffer.iter() {
-                        assert!(page.validate_page_with(0xdead, fid as u64, pid as u64));
+                        assert!(page.validate_page_with(0xdead, fid as u64, pid as u64, 0));
                     }
 
                     // Open new file for writing.
@@ -152,7 +152,7 @@ mod integration_tests {
                 if wb_idx == page_buffer.len() {
                     let page_buffer: &Vec<Page<WORDS>> = do_read::<WORDS>(&mut read_buffer, &mut file_active);
                     for page in page_buffer.iter() {
-                        assert!(page.validate_page_with(0xdead, fid as u64, pid as u64));
+                        assert!(page.validate_page_with(0xdead, fid as u64, pid as u64, 0));
                     }
                 }
             }

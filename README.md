@@ -3,12 +3,12 @@
 
 The goals of this project are the following the following:
 - Learn Linux filesystem IO
-- Develop a file system benchmark
+- Develop a file system benchmark as a vehicle for the previous.
     - Two distinct functionalities:
         - Function One: creation of a corpus of test data (write intensive)
         - Function Two: benchmark file access patterns (read, write) with optional, deterministic mutation rate 
         
-With the two goals in mind above, we shall focus on reads and writes of 'pages' to files.
+With the two goals in mind above, we shall focus on reads and writes of 'pages' to files. These pages are checksums pseudo-deterministic chunks of data.
 
 The end goal is to have a benchmark that can test large size (in number and bytes) of files on local and shared file systems.
 

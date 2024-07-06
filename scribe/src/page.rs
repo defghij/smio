@@ -108,14 +108,9 @@ pub struct Page<const W: usize> {
     /// Creates a new, populated, instace of Page.
     #[allow(dead_code)]
     pub fn new(seed: u64, file: u64, page: u64) -> Page<W> {
-        let data: [u64; W] = Page::generate_data(Page::<W>::assemble_seed(seed, file, page));
-        Page::<W> {
-            file,
-            seed,
-            page,
-            mutations: 0,
-            data
-        }
+        let mutations: u64 = 0;
+        let data: [u64; W] = Page::generate_data(Page::<W>::assemble_seed(seed, file, page, mutations));
+        Page::<W> { file, seed, page, mutations, data }
     }
 
     /// Creates an empty, zeroed, Page.
@@ -129,18 +124,20 @@ pub struct Page<const W: usize> {
         }
     }
 
+    // TODO: Include mutations in all of the relevant functions below
+
     ////////////////////////////////////////////////////
     //// Data Functions
 
     /// Combine seed elements into a final seed suitable for passing to
     /// `self.generate_data` function.
-    fn assemble_seed(seed: u64, file: u64, page: u64) -> u64 {
+    fn assemble_seed(seed: u64, file: u64, page: u64, mutations: u64) -> u64 {
         let seed_page: u64 = page << 32;   
         let seed_file: u64 = !(file) << 46;
         let seed_upper: u64 = seed_file | seed_page;
         let seed_lower: u64 = seed;
         let seed: u64 = seed_upper | seed_lower;
-        seed
+        seed + mutations
     }
    
     /// Invokes the hash function to generate data for Page.
@@ -159,13 +156,26 @@ pub struct Page<const W: usize> {
     /// Will return true if supplied arguments result in data that is consistent 
     /// with self.data. This function will generate data from supplied arguments
     /// and compare to state of self.
-    pub fn validate_page_with(self, seed: u64, file: u64, page: u64) -> bool {
-        let data: [u64; W] = Page::generate_data(Page::<W>::assemble_seed(seed, file, page));
+    pub fn validate_page_with(self, seed: u64, file: u64, page: u64, mutations: u64) -> bool {
+        let data: [u64; W] = Page::generate_data(Page::<W>::assemble_seed(seed, file, page, mutations));
         data == self.data
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.validate_page_with(self.seed, self.file, self. page, self.mutations)
+    }
+     
+    pub fn get_metadata(&self) -> (u64, u64, u64, u64) {
+        (self.seed,
+         self.file,
+         self.page,
+         self.mutations)
+
     }
 
     ////////////////////////////////////////////////////
     //// Mutatate/Transmute Functions
+    /// All mutate functions cause the re-generation of the data contained in a page.
 
     /// Reinitialize the page. This function alters all parts of the Page metadata.
     /// This is the same as creating a new page except `mutations` must be provided.
@@ -175,34 +185,42 @@ pub struct Page<const W: usize> {
         self.file = file;
         self.page = page;
         self.mutations = mutations;
-        self.data = Page::generate_data(Page::<W>::assemble_seed(self.seed + self.mutations, self.file, self.page));
+        self.data = Page::generate_data(Page::<W>::assemble_seed(self.seed, self.file, self.page, self.mutations));
         self
     }
 
     /// Advance mutation count by one. This generates new page data.
     #[allow(dead_code)]
-    pub fn mutate_seed(&mut self) -> &Self {
-        self.seed += 1;
+    pub fn mutate(&mut self) -> &Self {
         self.mutations += 1;
-        let data: [u64; W] = Page::generate_data(Page::<W>::assemble_seed(self.seed, self.file, self.page));
+        let data: [u64; W] = Page::generate_data(Page::<W>::assemble_seed(self.seed, self.file, self.page, self.mutations));
+        self.data = data;
+        self
+    }
+
+    /// Advance mutation count by one. This generates new page data.
+    #[allow(dead_code)]
+    pub fn update_seed(&mut self, seed: u64) -> &Self {
+        self.seed = seed;
+        let data: [u64; W] = Page::generate_data(Page::<W>::assemble_seed(self.seed, self.file, self.page, self.mutations));
         self.data = data;
         self
     }
 
     /// Alter the file meta data field. This generates new page data.
     #[allow(dead_code)]
-    pub fn mutate_file(&mut self, file: u64) -> &Self {
+    pub fn update_file(&mut self, file: u64) -> &Self {
         self.file = file;
-        let data: [u64; W] = Page::generate_data(Page::<W>::assemble_seed(self.seed, self.file, self.page));
+        let data: [u64; W] = Page::generate_data(Page::<W>::assemble_seed(self.seed, self.file, self.page, self.mutations));
         self.data = data;
         self
     }
 
     /// Alter the page meta data field. This generates new data.
     #[allow(dead_code)]
-    pub fn mutate_page(&mut self, page: u64) -> &Self {
+    pub fn update_page(&mut self, page: u64) -> &Self {
         self.page = page;
-        let data: [u64; W] = Page::generate_data(Page::<W>::assemble_seed(self.seed, self.file, self.page));
+        let data: [u64; W] = Page::generate_data(Page::<W>::assemble_seed(self.seed, self.file, self.page, self.mutations));
         self.data = data;
         self
     }
@@ -212,17 +230,17 @@ impl<const W:usize> PartialEq for Page<W> {
     /// Field by field equality test for the `Page<W>` type. Dependent
     /// on equality of all fields of the data type.
     fn eq(&self, other: &Self) -> bool {
-        if self.seed != other.seed { return false; }
-        if self.file != other.file { return false; }
-        if self.page != other.page { return false; }
+        if self.seed != other.seed           { return false; }
+        if self.file != other.file           { return false; }
+        if self.page != other.page           { return false; }
         if self.mutations != other.mutations { return false; }
-        if self.data != other.data { return false; }
+        if self.data != other.data           { return false; }
         true
     }
 }
 
 /// `&Page<W>` --> `&[u8]`
-impl<'a,const W:usize> TryFrom<&'a Page<W>> for &'a [u8] {
+impl<'a, const W:usize> TryFrom<&'a Page<W>> for &'a [u8] {
     type Error = bytemuck::PodCastError;
     fn try_from(value: &'a Page<W>) -> Result<Self, Self::Error> {
         Ok(bytemuck::bytes_of(value))
@@ -230,7 +248,7 @@ impl<'a,const W:usize> TryFrom<&'a Page<W>> for &'a [u8] {
 }
 
 /// Slice conversion: &[u8] --> &Page<W>
-impl<'a,const W:usize> TryFrom<&'a [u8]> for &'a Page<W> {
+impl<'a, const W:usize> TryFrom<&'a [u8]> for &'a Page<W> {
     type Error = bytemuck::PodCastError;
     fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
         bytemuck::try_from_bytes(value)
@@ -238,7 +256,7 @@ impl<'a,const W:usize> TryFrom<&'a [u8]> for &'a Page<W> {
 }
 
 /// Array conversion: &[u8;N] --> &Page<W>
-impl<'a,const N: usize, const W:usize> TryFrom<&'a [u8;N]> for &'a Page<W> {
+impl<'a, const N: usize, const W:usize> TryFrom<&'a [u8;N]> for &'a Page<W> {
     type Error = bytemuck::PodCastError;
     fn try_from(value: &'a [u8; N]) -> Result<Self, Self::Error> {
         bytemuck::try_from_bytes(value)
@@ -246,7 +264,7 @@ impl<'a,const N: usize, const W:usize> TryFrom<&'a [u8;N]> for &'a Page<W> {
 }
 
 /// Vector conversion: &Vec<u8> --> &Page<W>
-impl<'a,const W:usize> TryFrom<&'a Vec<u8>> for &'a Page<W> {
+impl<'a, const W:usize> TryFrom<&'a Vec<u8>> for &'a Page<W> {
     type Error = bytemuck::PodCastError;
     fn try_from(value: &'a Vec<u8>) -> Result<Self, Self::Error> {
         bytemuck::try_from_bytes(value)
@@ -288,22 +306,22 @@ fn general_functionality() {
 
 
     page.reinit(0xdead, 1, 1, 0);
-    let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead, 1, 1));
+    let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead, 1, 1, 0));
     assert!(page.data == bytes, "reinit failed");
 
 
-    page.mutate_seed();
-    let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead+1, 1, 1));
+    page.mutate();
+    let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead, 1, 1, 1));
     assert!(page.data == bytes, "mutate seed failed");
 
     
-    page.mutate_file(0);
-    let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead+1, 0, 1));
+    page.update_file(0);
+    let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead+1, 0, 1, 0));
     assert!(page.data == bytes, "mutate file failed");
 
 
-    page.mutate_page(0);
-    let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead+1, 0, 0));
+    page.update_page(0);
+    let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead+1, 0, 0, 0));
     assert!(page.data == bytes, "mutate page failed");
 
 
@@ -569,7 +587,7 @@ mod transmutation {
             let pages: &[Page<W>; PAGE_COUNT] = from_byte_slice(pages_bytes).expect("Could not transmute page!");
 
             for (p, page) in pages.iter().enumerate() {
-                assert!(page.validate_page_with(seed, file, p as u64)); 
+                assert!(page.validate_page_with(seed, file, p as u64, 0)); 
             }
         }
 
@@ -590,7 +608,7 @@ mod transmutation {
             
             
             for (p, page) in pages.iter().enumerate() {
-                assert!(page.validate_page_with(seed, file, p as u64)); 
+                assert!(page.validate_page_with(seed, file, p as u64, 0)); 
             }
         }
         #[test]
@@ -634,7 +652,7 @@ mod transmutation {
                                                         .expect("Could not convert bytes to Page");
 
             for (p, page) in pages_w.iter().enumerate() {
-                if !page.validate_page_with(seed, file, p as u64) {
+                if !page.validate_page_with(seed, file, p as u64, 0) {
                     std::fs::remove_file(tmpfile_name.clone()).expect("Unable to remove temporary testing file");
                     assert!(false, "Failed to valid page {} of {}", p, PAGE_COUNT);
                 }
