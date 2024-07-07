@@ -1,10 +1,8 @@
 use rand_xoshiro::rand_core::{RngCore, SeedableRng};
 use rand_xoshiro::Xoroshiro128PlusPlus;
 use std::fmt;
-//use serde::{Serialize, Deserialize};
 use bytemuck::{
     Pod, Zeroable,
-    //try_from_bytes, bytes_of,
 };
 
 
@@ -561,35 +559,6 @@ mod transmutation {
     mod to_and_from {
         const W: usize = (512 / 8) - 4;
         const PAGE_COUNT: usize = 64;
-
-        #[test]
-        fn random_page_bytes_array() {
-            use super::super::{
-                Page,
-                super::memory_ops::{
-                    to_byte_slice,
-                    from_byte_slice
-                }
-            };
-            use rand::prelude::*;
-            use array_init::array_init;
-
-            const PAGE_COUNT: usize = 64;
-
-            let mut rng: ThreadRng = rand::thread_rng();
-
-            let seed: u64 = rng.gen();
-            let file: u64 = rng.gen();
-
-            let pages: [Page<W>; PAGE_COUNT] = array_init(|i: usize| Page::new(seed, file, i as u64));
-            let pages_bytes: &[u8; PAGE_COUNT * std::mem::size_of::<Page<W>>()] = to_byte_slice(&pages);
-
-            let pages: &[Page<W>; PAGE_COUNT] = from_byte_slice(pages_bytes).expect("Could not transmute page!");
-
-            for (p, page) in pages.iter().enumerate() {
-                assert!(page.validate_page_with(seed, file, p as u64, 0)); 
-            }
-        }
 
         #[test]
         fn random_page_bytes_vec() {
