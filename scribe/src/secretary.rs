@@ -14,19 +14,19 @@ pub mod scheduler {
 
     #[allow(dead_code)]
     #[inline(always)]
-    fn get_grid_element<const X: usize, const S: usize>(i: u64) -> (u64, u64) {
-            let x0: u64 = i.rem_euclid(X as u64);
-            let y0: u64 = i / (X as u64);
+    fn get_grid_element<const PAGES: usize, const FILES: usize>(i: u64) -> (u64, u64) {
+            let x0: u64 = i.rem_euclid(PAGES as u64);
+            let y0: u64 = i / (PAGES as u64);
             (x0, y0)
     }
 
     pub struct WorkUnit( pub (u64, u64) );
-    pub struct WorkUnitIterator<const X: usize, const Y: usize>{
+    pub struct WorkUnitIterator<const PAGES: usize, const FILES: usize>{
         current: WorkUnit,
         stop: WorkUnit,
     }
-    impl<const X: usize, const Y: usize> WorkUnitIterator<X,Y>{
-        pub fn new(start: WorkUnit, stop: WorkUnit) -> WorkUnitIterator<X,Y> {
+    impl<const PAGES: usize, const FILES: usize> WorkUnitIterator<PAGES,FILES>{
+        pub fn new(start: WorkUnit, stop: WorkUnit) -> WorkUnitIterator<PAGES,FILES> {
 
             WorkUnitIterator {
                 current: start,
@@ -39,15 +39,15 @@ pub mod scheduler {
             let y0 = self.current.0.0;
             let ex = self.stop.0.1;
             let ey = self.stop.0.0;
-            let current = (X as u64) * (y0) + x0;
-            let stop = (X as u64) * (ey) + ex;
+            let current = (PAGES as u64) * (y0) + x0;
+            let stop = (PAGES as u64) * (ey) + ex;
 
             if stop < current {
                 return None;
             }
             let result: (u64, u64) = (y0, x0);
 
-            let x1 = (current+1).rem_euclid(X as u64); // page mod PAGE_COUNT
+            let x1 = (current+1).rem_euclid(PAGES as u64); // page mod PAGE_COUNT
             let y1: u64;
             if x1 != 0 {
                 y1 = y0

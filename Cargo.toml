@@ -9,6 +9,7 @@ edition = "2021"
 scribe =  { path = "./scribe" }
 clap = "4.4.6"
 typed-arena = "2.0.2"
+crossbeam = "0.8.4"
 
 
 [workspace]
