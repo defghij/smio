@@ -9,12 +9,13 @@ use clap::{
     Command
 };
 
-use scribe::{
+use SuperMassiveIO::{
     bookcase::BookCase,
-    PAGE_SIZE,
+    PAGE_BYTES,
     PAGES_PER_CHAPTER,
     page::Page,
-    chapter::Chapter
+    chapter::Chapter,
+    WorkQueue
 };
  
 
@@ -133,59 +134,27 @@ fn main() -> Result<()> {
                                                dcount,
                                                fprefix.to_owned(),
                                                fcount,
-                                               PAGE_SIZE,
+                                               PAGE_BYTES,
                                                pcount);
 
-    bookcase.construct()?;
-    single_threaded_write(&mut bookcase, seed);
-    single_threaded_read(&mut bookcase, seed);
-    bookcase.demolish()?;
 
 
     bookcase.construct()?;
     multi_threaded_write(&mut bookcase, seed);
     multi_threaded_read(&mut bookcase, seed);
-    //bookcase.demolish()?;
-
-    // Sequential page verification
-    single_threaded_read(&mut bookcase, seed);
+    bookcase.demolish()?;
 
     Ok(())
-
 }
 
-#[derive(Clone)]
-pub struct WorkQueue { 
-    current: Arc<AtomicU64>,
-    capacity: u64,
-    window: u64,
-    step: u64
-}
-impl WorkQueue {
-    pub fn new(capacity: u64, step: u64, window: u64) -> WorkQueue {
-        let current: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
-        WorkQueue {
-            current,
-            capacity,
-            window,
-            step
-        }
-    }
-    fn take_work(&self) -> (u64, u64) {
-        let work = self.current.fetch_add(self.step, std::sync::atomic::Ordering::Relaxed);
 
-        let x: u64 = work % self.window;
-        let y: u64 = work / self.window;
-        (x, y)
-    }
-}
 
 fn multi_threaded_write(bookcase: &BookCase, seed: u64) {
     let fcount = bookcase.book_count();
     let pcount = bookcase.page_count();
 
     const P: usize = PAGES_PER_CHAPTER;
-    const W: usize = PAGE_SIZE / 8 - 4;
+    const W: usize = PAGE_BYTES / 8 - 4;
     const B: usize = Page::<W>::PAGE_BYTES * P;
 
     let chapter = Box::new(Chapter::<P,W,B>::new());
@@ -202,8 +171,7 @@ fn multi_threaded_write(bookcase: &BookCase, seed: u64) {
         
         let handle = thread::spawn(move || {
 
-            loop {
-                let (page, book) = thread_queue.take_work();
+            while let Some((page, book)) = thread_queue.take_work() {
 
                 if page * book >= thread_queue.capacity { break; }
                 if book >= fcount                       { break; }
@@ -211,7 +179,7 @@ fn multi_threaded_write(bookcase: &BookCase, seed: u64) {
 
                 let mut writable_book: File = thread_bookcase.open_book(book, false, true).expect("Could  not open  file!");
                 if page != 0 {
-                    writable_book.seek(SeekFrom::Start(page * PAGE_SIZE as u64))
+                    writable_book.seek(SeekFrom::Start(page * PAGE_BYTES as u64))
                                  .expect("Unable to seek to write location in book");
                 }
                 
@@ -238,14 +206,15 @@ fn multi_threaded_write(bookcase: &BookCase, seed: u64) {
     }
 
     let duration: u128 = now.elapsed().unwrap().as_millis();
-    println!("Spent {}ms writing {} bytes", duration, fcount * pcount * PAGE_SIZE as u64);
+    println!("Spent {}ms writing {} bytes", duration, fcount * pcount * PAGE_BYTES as u64);
 }
-fn multi_threaded_read(bookcase: &BookCase, seed: u64) {
+
+fn multi_threaded_read(bookcase: &BookCase, _seed: u64) {
     let fcount = bookcase.book_count();
     let pcount = bookcase.page_count();
 
     const P: usize = PAGES_PER_CHAPTER;
-    const W: usize = PAGE_SIZE / 8 - 4;
+    const W: usize = PAGE_BYTES/ 8 - 4;
     const B: usize = Page::<W>::PAGE_BYTES * P;
 
     let chapter = Box::new(Chapter::<P,W,B>::new());
@@ -262,9 +231,7 @@ fn multi_threaded_read(bookcase: &BookCase, seed: u64) {
         
         let handle = thread::spawn(move || {
 
-            loop {
-
-                let (page, book) = thread_queue.take_work();
+            while let Some((page, book)) = thread_queue.take_work() {
 
                 if page * book >= thread_queue.capacity { break; }
                 if book >= fcount                       { break; }
@@ -275,7 +242,7 @@ fn multi_threaded_read(bookcase: &BookCase, seed: u64) {
                 let writable_buffer: &mut [u8] = thread_chapter.mutable_bytes_all();
                 let bytes_read: usize = readable_book.read(writable_buffer).expect("Could not read from file!");
 
-                if bytes_read == 0 || bytes_read % PAGE_SIZE != 0 { break; }
+                if bytes_read == 0 || bytes_read % PAGE_BYTES != 0 { break; }
 
                 thread_chapter.pages_all()
                        .iter()
@@ -297,113 +264,5 @@ fn multi_threaded_read(bookcase: &BookCase, seed: u64) {
     }
 
     let duration: u128 = now.elapsed().unwrap().as_millis();
-    println!("Spent {}ms reading {} bytes", duration, fcount * pcount * PAGE_SIZE as u64);
-}
-
-fn single_threaded_write(bookcase: &BookCase, seed: u64) {
-    let fcount = bookcase.book_count();
-    let pcount = bookcase.page_count();
-
-    const P: usize = PAGES_PER_CHAPTER;
-    const W: usize = PAGE_SIZE / 8 - 4;
-    const B: usize = Page::<W>::PAGE_BYTES * P;
-
-    let mut chapter = Box::new(Chapter::<P,W,B>::new());
-
-    let now: SystemTime = SystemTime::now();
-
-    // Write to a File
-    (0..fcount).into_iter()
-               .for_each(|book| { 
-                    let mut writable_book: File = bookcase.open_book(book, false, true).expect("Could  not open  file!");
-                   
-                    let full_writes: u64 = pcount / PAGES_PER_CHAPTER as u64;
-                    let partial_writes: u64 = pcount % PAGES_PER_CHAPTER as u64;
-
-                    //println!("Book {book} writes: full {full_writes}, partial {partial_writes}");
-
-                    (0..full_writes).into_iter()
-                                    .for_each(|fwrite|{
-                                        let start: u64 = fwrite * PAGES_PER_CHAPTER as u64;
-                                        let end: u64 = start + PAGES_PER_CHAPTER as u64 ;
-
-                                        //println!("Full Write: ({start},{end}) @ file{book}");
-
-                                        (start..end).for_each(|p|{
-                                            chapter.mutable_page(p % PAGES_PER_CHAPTER as u64)
-                                                   .reinit(seed, book, p, 0);
-                                        });
-
-                                        writable_book.write_all(chapter.bytes_all()).unwrap();
-                                        writable_book.flush().expect("Could not flush file");
-
-                                    });
-
-                    chapter.zeroize();
-
-                    if partial_writes > 0 {
-                        let partial_start: u64 = full_writes * PAGES_PER_CHAPTER as u64;
-                        let partial_end: u64 = partial_start + partial_writes;
-
-                        //println!("Partial Write: ({partial_start},{partial_end}) @ file{book}");
-
-                        (partial_start..partial_end).for_each(|p|{
-                            chapter.mutable_page(p % partial_writes)
-                                   .reinit(seed, book, p, 0);
-                        });
-
-                        let pages_to_write: usize = (partial_end - partial_start) as usize;
-                        let partial_byte_count: usize = PAGE_SIZE * pages_to_write;
-
-
-                        writable_book.write_all(chapter.bytes_upto(partial_byte_count)).unwrap();
-                        writable_book.flush().expect("Could not flush file");
-
-                        chapter.zeroize();
-                    }
-                    drop(writable_book);
-               });
-
-    let duration: u128 = now.elapsed().unwrap().as_millis();
-    println!("Spent {}ms writing {} bytes", duration, fcount * pcount * PAGE_SIZE as u64);
-}
-
-fn single_threaded_read(bookcase: &BookCase, seed: u64) {
-    let fcount = bookcase.book_count();
-    let pcount = bookcase.page_count();
-
-    const P: usize = PAGES_PER_CHAPTER;
-    const W: usize = PAGE_SIZE / 8 - 4;
-    const B: usize = Page::<W>::PAGE_BYTES * P;
-
-    let mut chapter = Box::new(Chapter::<P,W,B>::new());
-
-    let now: SystemTime = SystemTime::now();
-
-    // Read from a File
-    (0..fcount).into_iter()
-               .for_each(|book| { 
-                    let mut readable_book: File = bookcase.open_book(book, true, false).expect("Could  not open  file!");
-
-                    loop {
-                        let writable_buffer: &mut [u8] = chapter.mutable_bytes_all();
-                        let bytes_read: usize = readable_book.read(writable_buffer).expect("Could not read from file!");
-
-                        if bytes_read == 0 || bytes_read % PAGE_SIZE != 0 { break; }
-
-                        chapter.pages_all()
-                               .iter()
-                               .for_each(|page|{
-                                    if !page.is_valid() {
-                                        let (s, f, p, m) = page.get_metadata();
-                                        println!("Invalid Page Found: book {book}, page {page}");
-                                        println!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
-                                    }
-                               });
-                    }
-               });
-
-
-    let duration: u128 = now.elapsed().unwrap().as_millis();
-    println!("Spent {}ms reading {} bytes", duration, fcount * pcount * PAGE_SIZE as u64);
+    println!("Spent {}ms reading {} bytes", duration, fcount * pcount * PAGE_BYTES as u64);
 }

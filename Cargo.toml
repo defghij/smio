@@ -6,15 +6,31 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-scribe =  { path = "./scribe" }
+
+# Local dependencies
+aio-rs = { path = "./aio-rs" }
 clap = "4.4.6"
 typed-arena = "2.0.2"
 crossbeam = "0.8.4"
 
+# External Dependencies
+## Functional
+rand_xoshiro = "0.6.0" # Hashing function for data creation
+bytemuck = {version = "1.14.0", features = ["derive", "min_const_generics"] } # Convienent type transmutation
+rand = "0.8.5"         # Psuedo-RNG via thread_rng
+array-init = "2.1.0"   # Array initialization via iters and closures.
+
+# Testing
+serial_test = "2.0.0"  # Runs decorated tests serially
+tempfile = "3"         # Easily create temp files
+
+# Profiling and Debugging
+divan = "0.1.3"        # Easy to use profiling
+stacker = "0.1.15"     # Print stack information during runtime
+
 
 [workspace]
 members = [
-    "scribe",
     "aio-sys",
     "aio-rs",
 ]
