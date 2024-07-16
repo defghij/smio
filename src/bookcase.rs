@@ -1,13 +1,9 @@
 //use std::os::unix::prelude::OpenOptionsExt;
 use std::{
-    path::Path,
     fs::{
-        OpenOptions,
-        File,
-        remove_file,
-        remove_dir_all,
-        create_dir_all,
-    }
+        create_dir_all, remove_dir_all, remove_file, File, OpenOptions
+    }, path::{Path, PathBuf},
+    os::unix::fs::OpenOptionsExt
 };
 use std::io::Result;
 use std::sync::Arc;
@@ -27,7 +23,7 @@ use serial_test::serial;
 #[derive(Debug, Clone)]
 pub struct BookCase {
     constructed: bool,
-    path_prefix: Arc<String>,
+    path_prefix: Arc<PathBuf>,
     directory_prefix: Arc<String>,
     directory_count: u64,
     file_prefix: Arc<String>,
@@ -35,7 +31,7 @@ pub struct BookCase {
     page_size: usize,
     page_count: u64,
 } impl BookCase {
-    pub fn new(path_prefix: String,
+    pub fn new(path_prefix: PathBuf,
                directory_prefix: String,
                directory_count: u64,
                file_prefix: String,
@@ -43,6 +39,11 @@ pub struct BookCase {
                page_size: usize,
                page_count: u64
                ) -> BookCase {
+
+        if !path_prefix.exists() {
+            println!("LOL: {}", path_prefix.as_path().to_str().unwrap());
+            panic!("Path to root does not exist");
+        }
 
         BookCase {
             constructed: false,
@@ -74,12 +75,7 @@ pub struct BookCase {
     pub fn demolish(&mut self) -> Result<()> {
         if self.constructed {
             for id in 0..(self.directory_count as usize) {
-                let dpath: String = format!("{}/{}{:0width$}",
-                    self.path_prefix,
-                    self.directory_prefix,
-                    id,
-                    width = (self.directory_count.ilog10() + 1) as usize );
-                remove_dir_all(dpath)?;
+                remove_dir_all(self.shelf_location(id as u64).to_str().unwrap())?;
             }
             self.constructed = false;
         }
@@ -88,10 +84,11 @@ pub struct BookCase {
 
     fn create_book(&self, file_id: u64) -> Result<()> {
         let fsize: usize = self.book_size();
-        let path: String = self.book_location(file_id);
-        let path: &Path  = Path::new(&path);
+        let path: PathBuf = self.book_location(file_id);
+        let path: &Path  = path.as_path();
 
         if let Some(parent) = path.parent() {
+            println!("Creating dir: {}", path.parent().unwrap().to_str().unwrap());
             create_dir_all(parent)?;
         }
         let file: File = File::create(path)?;
@@ -104,16 +101,18 @@ pub struct BookCase {
 
     #[allow(dead_code)]
     fn destroy_book(self, id: u64) -> Result<()> {
-        let fpath: String = self.book_location(id);
+        let fpath: String = self.book_location(id).to_str().unwrap().to_string();
         remove_file(&fpath)
     }
 
     pub fn open_book(&self, id: u64, read: bool, write: bool) -> Result<File> {
-        let fpath: String = self.book_location(id);
+        let fpath: String = self.book_location(id).to_str().unwrap().to_string();
+        println!("Open book: {}", fpath);
         OpenOptions::new()
                     .read(read)
                     .write(write)
                     //.custom_flags(O_DIRECT)
+                    //.custom_flags(0)
                     .create({
                         if read && !write { false }
                         else              { true  }
@@ -124,16 +123,29 @@ pub struct BookCase {
     ////////////////////////////////////////////////////
     //// Utility Functions
     #[inline(always)]
-    pub fn book_location(&self, id: u64) -> String {
+    pub fn book_location(&self, id: u64) -> PathBuf {
         assert!(id < self.file_count);
-        format!("{}/{}{:0dwidth$}/{}{:0fwidth$}",
-            self.path_prefix,
-            self.directory_prefix,
-            id.rem_euclid(self.directory_count),
-            self.file_prefix,
-            id,
-            dwidth = (self.directory_count.ilog10() + 1) as usize,
-            fwidth = (self.file_count.ilog10() + 1) as usize )
+
+        let mut book_location: PathBuf = self.shelf_location(id % self.directory_count);
+        let book: String = format!("{}{:0fwidth$}",
+                                    self.file_prefix,
+                                    id,
+                                    fwidth = (self.file_count.ilog10() + 1) as usize);
+        book_location.push(book);
+        book_location
+    }
+    
+    pub fn shelf_location(&self, id:u64) -> PathBuf {
+        assert!(id < self.directory_count);
+        let mut location: PathBuf = PathBuf::new();
+        location.push(self.path_prefix.to_str().unwrap());
+
+        let shelf: String = format!("{}{:0dwidth$}", 
+                                    self.directory_prefix, 
+                                    id.rem_euclid(self.directory_count),
+                                    dwidth = (self.directory_count.ilog10() + 1) as usize);
+        location.push(shelf);
+        location
     }
 
     #[inline(always)]
@@ -165,7 +177,7 @@ pub struct BookCase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let dwidth: usize = (self.directory_count.ilog10() + 1) as usize;
         let fwidth: usize = (self.file_count.ilog10() + 1) as usize;
-        write!(f, "Root:............ {}\n", self.path_prefix)?;
+        write!(f, "Root:............ {:?}\n", self.path_prefix.to_str().unwrap())?;
         write!(f, "Directory Name:.. {}[{:0width$}-{:0width$}]\n", 
                     self.directory_prefix,
                     0,
@@ -193,9 +205,13 @@ pub struct BookCase {
 #[serial]
 fn creation_and_demolition() {
     use std::fs::{read_dir, remove_dir};
+    use tempfile::tempdir;
 
-    let pprefix: String = String::from("./testing");
-    let dprefix: String = String::from("shelf");
+    let test_dir = tempdir().unwrap().into_path();
+
+    println!("[Info] Test attempt to create and destory a collection of files in '{}'", test_dir.to_str().unwrap());
+    let pprefix: PathBuf = test_dir.clone();
+    let dprefix: String = String::from("cad-shelf");
     let fprefix: String = String::from("book");
     let mut bookcase: BookCase = BookCase::new(
                           pprefix.to_owned(),
@@ -209,7 +225,7 @@ fn creation_and_demolition() {
     bookcase.construct().expect("Could not create test bookcase structures.");
 
     // Get all file names in the test directories.
-    let files: Vec<String> = read_dir("./testing")
+    let files: Vec<String> = read_dir(test_dir.as_path())
                                     .expect("unable to read directory")
                                     .into_iter()
                                     .flat_map(|d| {
@@ -236,11 +252,13 @@ fn creation_and_demolition() {
 
     (0..bookcase.book_count()).into_iter()
                               .for_each(|f|{
-                                  assert!(files.contains(&bookcase.book_location(f)))
+                                  assert!(files.contains(&bookcase.book_location(f)
+                                                                  .to_str().unwrap()
+                                                                  .to_string()))
                               });
 
     bookcase.demolish().expect("Could not create test bookcase structures.");
-    let files: Vec<String> = read_dir("./testing")
+    let files: Vec<String> = read_dir(test_dir.as_path())
                                     .expect("unable to read directory")
                                     .into_iter()
                                     .flat_map(|d| {
@@ -258,7 +276,7 @@ fn creation_and_demolition() {
                                     })
                                     .collect();
     assert!(files.len() == 0);
-    remove_dir(pprefix).unwrap();
+    remove_dir(pprefix.as_path()).unwrap();
 }
 
 
@@ -269,9 +287,14 @@ fn create_open_destroy_book() {
     // fn destroy_book(self, id: u64) -> Result<()> {
     // pub fn open_book(&self, id: u64, read: bool, write: bool) -> File {
     use std::io::ErrorKind;
+    use tempfile::tempdir;
+
+    let test_dir = tempdir().unwrap().into_path();
+
+    println!("[Info] Test attempt to create and destory a collection of files in '{}'", test_dir.to_str().unwrap());
     
-    let pprefix: String = String::from("./testing");
-    let dprefix: String = String::from("shelf");
+    let pprefix: PathBuf = test_dir;
+    let dprefix: String = String::from("codb-shelf");
     let fprefix: String = String::from("book");
     let bookcase: BookCase = BookCase::new(
                           pprefix.to_owned(),
@@ -301,9 +324,9 @@ fn create_open_destroy_book() {
 
 
     // TODO: This should not be an error-- bookcase.demolish should clean up the shelves
-    //bookcase.clone().demolish().expect("Could not construct bookcase");
-    //assert!(std::fs::remove_dir(pprefix).err().unwrap().kind() == ErrorKind::DirectoryNotEmpty);
+    bookcase.clone().demolish().expect("Could not construct bookcase");
+    assert!(std::fs::remove_dir(pprefix.as_path()).is_err());  //.err().unwrap().kind() == ErrorKind::DirectoryNotEmpty);
     
-    assert!(std::fs::remove_dir_all(pprefix).is_ok());
+    assert!(std::fs::remove_dir_all(pprefix.as_path()).is_ok());
 }
 
