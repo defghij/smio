@@ -1,14 +1,11 @@
 use std::{ 
-    fs::File, io::{ Read, Result, Seek, SeekFrom, Write }, sync::{atomic::AtomicU64, Arc}, thread, time::SystemTime
+    fs::File, io::{ Read, Result, Seek, SeekFrom, Write }, path::PathBuf, sync::{atomic::AtomicU64, Arc}, thread, time::SystemTime
 };
 use clap::{
-    ArgMatches,
-    value_parser,
-    Arg,
-//    ArgGroup,
-    Command
+    parser::ValueSource, value_parser, Arg, ArgAction, ArgMatches, Command, ValueHint
 };
 
+use serde_json::Value;
 use SuperMassiveIO::{
     bookcase::BookCase,
     PAGE_BYTES,
@@ -41,6 +38,8 @@ fn cli_arguments() -> Command {
                 .long("seed")
                 .default_value("15552853473234178512") /*0xD7D6D5D4D3D2D1D0*/
                 .value_parser(value_parser!(u64))
+                .value_name("integer")
+                .value_hint(ValueHint::Other)
                 .help("Seed value used to generate page data.")
          )
 
@@ -52,6 +51,8 @@ fn cli_arguments() -> Command {
                 .long("page-size")
                 .default_value("4096")
                 .value_parser(value_parser!(usize))
+                .value_name("integer")
+                .value_hint(ValueHint::Other)
                 .help("The number of bytes a page must contain.")
         )
         .arg(
@@ -60,15 +61,20 @@ fn cli_arguments() -> Command {
                 .long("page-count")
                 .default_value("512")
                 .value_parser(value_parser!(u64))
-                .help("The number of bytes a page must contain.")
+                .value_name("integer")
+                .value_hint(ValueHint::Other)
+                .help("Size of a page as specified by $2^{exponent}$ bytes.")
         )
+        // TODO: This should conflict with -p and -P
         .arg(
             Arg::new("book-size")
                 .short('F')
                 .long("file-size")
                 .default_value("2097152")
                 .value_parser(value_parser!(usize))
-                .help("Size of files in bytes. If not a multiple of the page size, the remaining bytes will be be dropped")
+                .value_name("integer")
+                .value_hint(ValueHint::Other)
+                .help("Size of files as specified by $2^{exponent}$ bytes. If not a multiple of the page size, the remaining bytes will be be dropped")
         )
         .arg(
             Arg::new("book-count")
@@ -76,6 +82,8 @@ fn cli_arguments() -> Command {
                 .long("file-count")
                 .default_value("1")
                 .value_parser(value_parser!(u64))
+                .value_name("integer")
+                .value_hint(ValueHint::Other)
                 .help("Number of books (files) to create.")
         )
         .arg(
@@ -83,7 +91,9 @@ fn cli_arguments() -> Command {
                 .long("file-prefix")
                 .default_value("book")
                 .value_parser(value_parser!(String))
-                .help("String prefix for generated books (files).")
+                .value_name("string")
+                .value_hint(ValueHint::Other)
+                .help("Prefix for generated books (files). Will have form 'prefix##'")
         )
 
         // DIRECTORY LAYOUT
@@ -94,6 +104,8 @@ fn cli_arguments() -> Command {
                 .long("directory-count")
                 .default_value("1")
                 .value_parser(value_parser!(u64))
+                .value_name("integer")
+                .value_hint(ValueHint::Other)
                 .help("Number of generated directories.")
         )
         .arg(
@@ -101,15 +113,37 @@ fn cli_arguments() -> Command {
                 .long("directory-prefix")
                 .default_value("shelf")
                 .value_parser(value_parser!(String))
-                .help("String prefix for generated directories.")
+                .value_name("string")
+                .value_hint(ValueHint::Other)
+                .help("Prefix for generated directories. Will have the form 'prefix##'")
         )
-        //// Manually specify list of directories
         .arg(
-            Arg::new("directory-list")
-                .long("directory-list")
-                .value_parser(value_parser!(String))
-                .help("A comma separated list of directories to be created and used for book generation. Cannot be used with `--directory-prefix` & `--directory-count`.")
+            Arg::new("path-prefix")
+                .long("path-prefix")
+                .default_value("/tmp")
+                .value_parser(value_parser!(PathBuf))
+                .value_name("path")
+                .value_hint(ValueHint::FilePath)
+                .help("Path to the root (parent) directory for the books (directories) of the program input/output.")
         )
+
+        // Write Characterization
+        .arg(
+            Arg::new("o_direct")
+                .long("direct-io")
+                .action(ArgAction::SetTrue)
+                .help("Will use direct IO (O_DIRECT). Will error if not available or incompatable with other options.")
+        )
+        // Config File Path: TODO
+        //.arg(
+        //    Arg::new("config")
+        //        .long("configuration-file")
+        //        .value_parser(value_parser!(PathBuf))
+        //        .value_name("path")
+        //        .value_hint(ValueHint::FilePath)
+        //        .help("Path to file that can be used in place of CLI arguments. Note: CLI arguments have precedence.")
+        //)
+
 } 
 
 
@@ -118,11 +152,18 @@ fn main() -> Result<()> {
     let matches: ArgMatches = cli_arguments().get_matches();
 
     if let Some(c) = matches.get_one::<String>("verbosity") {
-        println!("Verbosity Level: {c}");
+        println!("[Info] Verbosity Level: {c}");
+    }
+
+    if matches.value_source("path-prefix")
+              .is_some_and(|source| source != ValueSource::CommandLine)
+    {
+        println!("[Warn] Using default value for prefix path");
+
     }
 
     // For testing. Unwrap is safe due to default values.
-    let pprefix: String = String::from("../testing/case");
+    let pprefix: &PathBuf = matches.get_one::<PathBuf>("path-prefix").unwrap();
     let dprefix: String = matches.get_one::<String>("directory-prefix").unwrap().to_string();
     let fprefix: String = matches.get_one::<String>("book-prefix").unwrap().to_string();
     let dcount: u64     = *matches.get_one("directory-count").unwrap();
@@ -142,7 +183,7 @@ fn main() -> Result<()> {
     bookcase.construct()?;
     multi_threaded_write(&mut bookcase, seed);
     multi_threaded_read(&mut bookcase, seed);
-    bookcase.demolish()?;
+    //bookcase.demolish()?;
 
     Ok(())
 }
