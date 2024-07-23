@@ -51,6 +51,10 @@ impl<const P: usize, const W: usize, const B: usize> Chapter<P,W,B> {
         unsafe { &self.0.bytes[0..upper_bound] }
     }
 
+    pub fn byte_count(&self) -> usize {
+        B
+    }
+
     #[allow(dead_code)]
     pub fn mutable_bytes_all(&mut self) -> &mut [u8] {
         unsafe { &mut self.0.bytes }

@@ -5,6 +5,7 @@ use clap::{
     parser::ValueSource, value_parser, Arg, ArgAction, ArgMatches, Command, ValueHint
 };
 
+use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
 use serde_json::Value;
 use SuperMassiveIO::{
     bookcase::BookCase,
@@ -162,7 +163,8 @@ fn main() -> Result<()> {
 
     }
 
-    // For testing. Unwrap is safe due to default values.
+
+    // Set up the file structure
     let pprefix: &PathBuf = matches.get_one::<PathBuf>("path-prefix").unwrap();
     let dprefix: String = matches.get_one::<String>("directory-prefix").unwrap().to_string();
     let fprefix: String = matches.get_one::<String>("book-prefix").unwrap().to_string();
@@ -170,25 +172,90 @@ fn main() -> Result<()> {
     let fcount: u64     = *matches.get_one("book-count").unwrap();
     let pcount: u64     = *matches.get_one("page-count").unwrap();
     let seed: u64       = *matches.get_one("seed").unwrap();
+    let direct_io: bool = *matches.get_one("o_direct").unwrap();
+
+
     let mut bookcase: BookCase = BookCase::new(pprefix.to_owned(), 
                                                dprefix.to_owned(),
                                                dcount,
                                                fprefix.to_owned(),
                                                fcount,
                                                PAGE_BYTES,
-                                               pcount);
-
-
-
+                                               pcount,
+                                               seed);
+    if direct_io { bookcase.use_direct_io() };
     bookcase.construct()?;
-    multi_threaded_write(&mut bookcase, seed);
-    multi_threaded_read(&mut bookcase, seed);
-    //bookcase.demolish()?;
+    let fcount = bookcase.book_count();
+    let pcount = bookcase.page_count();
+
+    const P: usize = PAGES_PER_CHAPTER;
+    const W: usize = PAGE_BYTES / 8 - 4;
+    const B: usize = Page::<W>::PAGE_BYTES * P;
+    let queue: WorkQueue = WorkQueue::new(fcount*pcount, PAGES_PER_CHAPTER as u64, pcount);
+    let chapter = Box::new(Chapter::<P,W,B>::new());
+
+
+    // Set up thread pool
+    let available_cpus: usize = std::thread::available_parallelism().unwrap().into();
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(available_cpus)
+                                              .build()
+                                              .unwrap();
+
+    pool.install(|| {
+        (0..available_cpus).into_par_iter()
+                           .for_each(|_|{
+                               do_write_work::<P,W,B>(queue.clone(), chapter.clone(), bookcase.clone());
+                           });
+    });
+
+    //multi_threaded_write(&mut bookcase, seed);
+    multi_threaded_read(&mut bookcase, seed + 1);
+    bookcase.demolish()?;
 
     Ok(())
 }
 
+fn do_write_work<const P:usize, const W: usize, const B: usize>(queue: WorkQueue, mut chapter: Box<Chapter<P,W,B>>, bookcase: BookCase) {
+    let seed: u64 = bookcase.seed;
+    let fcount = bookcase.book_count();
+    let pcount = bookcase.page_count();
+    let mut work: u64 = 0;
 
+    let now: SystemTime = SystemTime::now();
+
+    while let Some((page, book)) = queue.take_work() {
+
+        if page * book >= queue.capacity { break; }
+        if book >= fcount                { break; }
+        if page >= pcount                { break; }
+
+        let mut writable_book: File = bookcase.open_book(book, false, true).expect("Could  not open  file!");
+        if page != 0 {
+            writable_book.seek(SeekFrom::Start(page * PAGE_BYTES as u64))
+                         .expect("Unable to seek to write location in book");
+        }
+        
+        let start: u64 = page;
+        let end: u64   = start + queue.step ;
+
+        if end <= pcount {
+            (start..end).for_each(|p|{
+                chapter.mutable_page(p % queue.step)
+                              .reinit(seed, book, p, 0);
+            });
+
+            writable_book.write_all(chapter.bytes_all()).unwrap();
+            writable_book.flush().expect("Could not flush file");
+            work += chapter.byte_count() as u64;
+        }
+    }
+
+    let duration: u128 = now.elapsed().unwrap().as_millis();
+    println!("[tid:{}] Spent {}ms writing {} bytes", rayon::current_thread_index().unwrap(),
+                                                     duration,
+                                                     work);
+
+}
 
 fn multi_threaded_write(bookcase: &BookCase, seed: u64) {
     let fcount = bookcase.book_count();

@@ -30,6 +30,8 @@ pub struct BookCase {
     file_count: u64,
     page_size: usize,
     page_count: u64,
+    direct_io: bool,
+    pub seed: u64,
 } impl BookCase {
     pub fn new(path_prefix: PathBuf,
                directory_prefix: String,
@@ -37,11 +39,11 @@ pub struct BookCase {
                file_prefix: String,
                file_count: u64,
                page_size: usize,
-               page_count: u64
+               page_count: u64,
+               seed: u64
                ) -> BookCase {
 
         if !path_prefix.exists() {
-            println!("LOL: {}", path_prefix.as_path().to_str().unwrap());
             panic!("Path to root does not exist");
         }
 
@@ -53,7 +55,9 @@ pub struct BookCase {
             file_prefix: Arc::new(file_prefix),
             file_count,
             page_size,
-            page_count
+            page_count,
+            direct_io: false,
+            seed
         }
     }
 
@@ -88,7 +92,7 @@ pub struct BookCase {
         let path: &Path  = path.as_path();
 
         if let Some(parent) = path.parent() {
-            println!("Creating dir: {}", path.parent().unwrap().to_str().unwrap());
+            //println!("Creating dir: {}", path.parent().unwrap().to_str().unwrap());
             create_dir_all(parent)?;
         }
         let file: File = File::create(path)?;
@@ -107,21 +111,28 @@ pub struct BookCase {
 
     pub fn open_book(&self, id: u64, read: bool, write: bool) -> Result<File> {
         let fpath: String = self.book_location(id).to_str().unwrap().to_string();
-        println!("Open book: {}", fpath);
-        OpenOptions::new()
-                    .read(read)
-                    .write(write)
-                    //.custom_flags(O_DIRECT)
-                    //.custom_flags(0)
-                    .create({
-                        if read && !write { false }
-                        else              { true  }
-                    })
-                    .open(&fpath)
+        OpenOptions::new().read(read)
+                          .write(write)
+                          .create(
+                               if read && !write { false }
+                               else              { true  }
+                           )
+                          .custom_flags(
+                              if self.direct_io { libc::O_DIRECT }
+                              else              { 0 }
+                          )
+                          .open(&fpath)
     }
 
     ////////////////////////////////////////////////////
-    //// Utility Functions
+    //// Configuration Functions
+    pub fn use_direct_io(&mut self) {
+        self.direct_io = true;
+    }
+    
+
+    ////////////////////////////////////////////////////
+    //// Structure Utility Functions
     #[inline(always)]
     pub fn book_location(&self, id: u64) -> PathBuf {
         assert!(id < self.file_count);
