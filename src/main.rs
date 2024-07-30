@@ -2,11 +2,10 @@ use std::{
     fs::File, io::{ Read, Result, Seek, SeekFrom, Write }, path::PathBuf, sync::{atomic::AtomicU64, Arc}, thread, time::SystemTime
 };
 use clap::{
-    parser::ValueSource, value_parser, Arg, ArgAction, ArgMatches, Command, ValueHint
+    parser::ValueSource, value_parser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint
 };
 
 use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
-use serde_json::Value;
 use SuperMassiveIO::{
     bookcase::BookCase,
     PAGE_BYTES,
@@ -43,6 +42,14 @@ fn cli_arguments() -> Command {
                 .value_hint(ValueHint::Other)
                 .help("Seed value used to generate page data.")
          )
+        .arg(
+            Arg::new("config")
+                .long("configuration-file")
+                .value_parser(value_parser!(PathBuf))
+                .value_name("path")
+                .value_hint(ValueHint::FilePath)
+                .help("Path to file that can be used in place of CLI arguments. Note: CLI arguments have precedence.")
+        )
 
         // FILE LAYOUT
         // Size, layout, count
@@ -121,7 +128,7 @@ fn cli_arguments() -> Command {
         .arg(
             Arg::new("path-prefix")
                 .long("path-prefix")
-                .default_value("/tmp")
+                .default_value("/tmp/smio")
                 .value_parser(value_parser!(PathBuf))
                 .value_name("path")
                 .value_hint(ValueHint::FilePath)
@@ -135,56 +142,74 @@ fn cli_arguments() -> Command {
                 .action(ArgAction::SetTrue)
                 .help("Will use direct IO (O_DIRECT). Will error if not available or incompatable with other options.")
         )
-        // Config File Path: TODO
-        //.arg(
-        //    Arg::new("config")
-        //        .long("configuration-file")
-        //        .value_parser(value_parser!(PathBuf))
-        //        .value_name("path")
-        //        .value_hint(ValueHint::FilePath)
-        //        .help("Path to file that can be used in place of CLI arguments. Note: CLI arguments have precedence.")
-        //)
+        .subcommand(
+            Command::new("create")
+                .about("Create data to be used late with SMIO")
+        )
+        .subcommand(
+            Command::new("bench")
+                .about("Benchmarking mode")
+        )
 
 } 
 
-
-fn main() -> Result<()> {
-
+/// This function handles all aspects of creating the application context
+/// type BookCase. This can be either from a configuration file or from
+/// commandline arguments.
+/// TODO: This should probably return a Result<T,E>
+fn setup_bookcase() -> BookCase {
     let matches: ArgMatches = cli_arguments().get_matches();
 
     if let Some(c) = matches.get_one::<String>("verbosity") {
         println!("[Info] Verbosity Level: {c}");
     }
 
-    if matches.value_source("path-prefix")
-              .is_some_and(|source| source != ValueSource::CommandLine)
-    {
-        println!("[Warn] Using default value for prefix path");
+    let mut bookcase: BookCase;
+    if let Some(config_file) = matches.get_one::<PathBuf>("config") {
+        bookcase = BookCase::from_string(config_file.to_str().unwrap());
+        if !bookcase.is_assembled() {
+            panic!("Configuration expected files which cannot be found! Check your data directory.")
+        }
+    } else {
+        if matches.value_source("path-prefix")
+                  .is_some_and(|source| source != ValueSource::CommandLine)
+        {
+            println!("[Warn] Using default value for prefix path");
+
+        }
+
+
+        // Set up the file structure
+        let pprefix: &PathBuf = matches.get_one::<PathBuf>("path-prefix").unwrap();
+        let dprefix: String = matches.get_one::<String>("directory-prefix").unwrap().to_string();
+        let fprefix: String = matches.get_one::<String>("book-prefix").unwrap().to_string();
+        let dcount: u64     = *matches.get_one("directory-count").unwrap();
+        let fcount: u64     = *matches.get_one("book-count").unwrap();
+        let pcount: u64     = *matches.get_one("page-count").unwrap();
+        let seed: u64       = *matches.get_one("seed").unwrap();
+        let direct_io: bool = *matches.get_one("o_direct").unwrap();
+
+
+        bookcase = BookCase::new(pprefix.to_owned(), 
+                                 dprefix.to_owned(),
+                                 dcount,
+                                 fprefix.to_owned(),
+                                 fcount,
+                                 PAGE_BYTES,
+                                 pcount,
+                                 seed);
+        if direct_io { bookcase.use_direct_io() };
 
     }
+    bookcase
+}
 
+fn main() -> Result<()> {
 
-    // Set up the file structure
-    let pprefix: &PathBuf = matches.get_one::<PathBuf>("path-prefix").unwrap();
-    let dprefix: String = matches.get_one::<String>("directory-prefix").unwrap().to_string();
-    let fprefix: String = matches.get_one::<String>("book-prefix").unwrap().to_string();
-    let dcount: u64     = *matches.get_one("directory-count").unwrap();
-    let fcount: u64     = *matches.get_one("book-count").unwrap();
-    let pcount: u64     = *matches.get_one("page-count").unwrap();
-    let seed: u64       = *matches.get_one("seed").unwrap();
-    let direct_io: bool = *matches.get_one("o_direct").unwrap();
+    let mut bookcase: BookCase = setup_bookcase();
 
-
-    let mut bookcase: BookCase = BookCase::new(pprefix.to_owned(), 
-                                               dprefix.to_owned(),
-                                               dcount,
-                                               fprefix.to_owned(),
-                                               fcount,
-                                               PAGE_BYTES,
-                                               pcount,
-                                               seed);
-    if direct_io { bookcase.use_direct_io() };
     bookcase.construct()?;
+    bookcase.write_configuration_file();
     let fcount = bookcase.book_count();
     let pcount = bookcase.page_count();
 
@@ -209,8 +234,8 @@ fn main() -> Result<()> {
     });
 
     //multi_threaded_write(&mut bookcase, seed);
-    multi_threaded_read(&mut bookcase, seed + 1);
-    bookcase.demolish()?;
+    multi_threaded_read(&mut bookcase);
+    //bookcase.demolish()?;
 
     Ok(())
 }
@@ -317,7 +342,7 @@ fn multi_threaded_write(bookcase: &BookCase, seed: u64) {
     println!("Spent {}ms writing {} bytes", duration, fcount * pcount * PAGE_BYTES as u64);
 }
 
-fn multi_threaded_read(bookcase: &BookCase, _seed: u64) {
+fn multi_threaded_read(bookcase: &BookCase) {
     let fcount = bookcase.book_count();
     let pcount = bookcase.page_count();
 

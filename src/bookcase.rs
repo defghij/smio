@@ -8,6 +8,7 @@ use std::{
 use std::io::Result;
 use std::sync::Arc;
 use std::fmt;
+use serde::{Deserialize, Serialize};
 
 // I dont know why this complains about unused import
 #[allow(unused_imports)]
@@ -20,13 +21,13 @@ use serial_test::serial;
 ///
 /// This application has numerous side-effects as it interacts with
 /// the operating system to create and desctory inodes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BookCase {
     constructed: bool,
-    path_prefix: Arc<PathBuf>,
-    directory_prefix: Arc<String>,
+    path_prefix: PathBuf,
+    directory_prefix: String,
     directory_count: u64,
-    file_prefix: Arc<String>,
+    file_prefix: String,
     file_count: u64,
     page_size: usize,
     page_count: u64,
@@ -49,10 +50,10 @@ pub struct BookCase {
 
         BookCase {
             constructed: false,
-            path_prefix: Arc::new(path_prefix),
-            directory_prefix: Arc::new(directory_prefix),
+            path_prefix: path_prefix,
+            directory_prefix: directory_prefix,
             directory_count,
-            file_prefix: Arc::new(file_prefix),
+            file_prefix: file_prefix,
             file_count,
             page_size,
             page_count,
@@ -61,6 +62,18 @@ pub struct BookCase {
         }
     }
 
+    pub fn from_string(path: &str) -> BookCase {
+        use std::fs::read_to_string;
+
+        let data: String = read_to_string(path).expect("Unable to read configuration file");
+        serde_json::from_str(&data).expect("Unable to deserialize data from configuration file")
+    }
+
+    pub fn write_configuration_file(&self) {
+        use std::fs::write;
+        let serialized = serde_json::to_string_pretty(self).unwrap();
+        write(format!("{}/config.json", self.path_prefix.to_str().unwrap()), serialized).expect("Unable to write configuration file");
+    }
 
     /// Creates the directory (Shelf) and file (Book) structure
     /// described by the instantiation of this type.
@@ -184,6 +197,48 @@ pub struct BookCase {
         self.page_size as u64 / 8
     }
 
+    pub fn is_assembled(&self) -> bool {
+        use std::fs::read_dir;
+        // Get all file names in the test directories.
+        let files: Vec<String> = read_dir(self.path_prefix.clone())
+                                        .expect("unable to read directory")
+                                        .into_iter()
+                                        .filter(|dir| {
+                                            dir.as_ref().unwrap().metadata().unwrap().is_dir()
+                                        })
+                                        .flat_map(|dir| {
+                                            let files: Vec<String> = read_dir(dir.unwrap().path())
+                                                                            .expect("Unable to read sub dir")
+                                                                            .into_iter()
+                                                                            .map(|f| { f.unwrap()
+                                                                                       .path()
+                                                                                       .into_os_string()
+                                                                                       .into_string()
+                                                                                       .unwrap()
+                                                                            })
+                                                                            .collect();
+                                            files
+                                        })
+                                        .collect();
+
+
+        // The two following tests ensure that:
+        //      - |files| == |books|
+        //      - books is subset of files
+        //      - if x and y are in books then x != y.
+        // which implies they are identical.
+        if files.len() != self.book_count() as usize { return false; }
+
+        // True if all books accounted for otherwise false.
+        !(0..self.book_count()).into_iter()
+                               .map(|f|{
+                                  !files.contains(&self.book_location(f)
+                                                       .to_str().unwrap()
+                                                       .to_string())
+                               })
+                               .fold(false, |acc, x| acc && x)
+    }
+
 } impl fmt::Display for BookCase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let dwidth: usize = (self.directory_count.ilog10() + 1) as usize;
@@ -225,13 +280,14 @@ fn creation_and_demolition() {
     let dprefix: String = String::from("cad-shelf");
     let fprefix: String = String::from("book");
     let mut bookcase: BookCase = BookCase::new(
-                          pprefix.to_owned(),
-                          dprefix.to_owned(),
+                          pprefix.clone(),
+                          dprefix,
                           2,
-                          fprefix.to_owned(),
+                          fprefix,
                           4,
                           512,
-                          2);
+                          2,
+                          0xDeadBeef);
 
     bookcase.construct().expect("Could not create test bookcase structures.");
 
@@ -308,13 +364,14 @@ fn create_open_destroy_book() {
     let dprefix: String = String::from("codb-shelf");
     let fprefix: String = String::from("book");
     let bookcase: BookCase = BookCase::new(
-                          pprefix.to_owned(),
-                          dprefix.to_owned(),
+                          pprefix.clone(),
+                          dprefix,
                           1,
-                          fprefix.to_owned(),
+                          fprefix,
                           1,
                           512,
-                          1);
+                          1,
+                          0xDeadBeef);
 
     assert!(bookcase.open_book(0, true, false).err().unwrap().kind() == ErrorKind::NotFound);
     assert!(bookcase.open_book(0, false, true).err().unwrap().kind() == ErrorKind::NotFound);
