@@ -6,7 +6,6 @@ use std::{
     os::unix::fs::OpenOptionsExt
 };
 use std::io::Result;
-use std::sync::Arc;
 use std::fmt;
 use serde::{Deserialize, Serialize};
 

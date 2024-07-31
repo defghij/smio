@@ -5,7 +5,7 @@ use clap::{
     parser::ValueSource, value_parser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint
 };
 
-use rayon::iter::{IntoParallelIterator, ParallelIterator as _};
+use rayon::{iter::{IntoParallelIterator, ParallelIterator as _}, ThreadPool};
 use SuperMassiveIO::{
     bookcase::BookCase,
     PAGE_BYTES,
@@ -15,7 +15,6 @@ use SuperMassiveIO::{
     WorkQueue
 };
  
-
 fn cli_arguments() -> Command {
 
     Command::new("SuperMassiveIO")
@@ -24,12 +23,25 @@ fn cli_arguments() -> Command {
         .author("defghij")
         // Common Arguments
         .arg(
+            Arg::new("create")
+                .long("create")
+                .action(ArgAction::SetTrue)
+                .help("Enables the creation of data.")
+        )
+        .arg(
+            Arg::new("bench")
+                .long("bench")
+                .action(ArgAction::SetTrue)
+                .help("Enables the benchmarking mode (requires previously created data if not used with 'create' flag")
+        )
+        .arg(
             Arg::new("verbosity")
                 .short('v')
                 .long("verbosity")
                 .value_parser(["none", "info", "debug", "warning"])
                 .default_value("none")
                 .default_missing_value("info")
+                .groups(["creation", "benchmarking"])
                 .help("Verbosity level of the application")
          )
         .arg(
@@ -40,6 +52,7 @@ fn cli_arguments() -> Command {
                 .value_parser(value_parser!(u64))
                 .value_name("integer")
                 .value_hint(ValueHint::Other)
+                .group("creation")
                 .help("Seed value used to generate page data.")
          )
         .arg(
@@ -48,7 +61,15 @@ fn cli_arguments() -> Command {
                 .value_parser(value_parser!(PathBuf))
                 .value_name("path")
                 .value_hint(ValueHint::FilePath)
+                .group("benchmarking")
                 .help("Path to file that can be used in place of CLI arguments. Note: CLI arguments have precedence.")
+        )
+        .arg(
+            Arg::new("tear-down")
+                .long("destroy-after")
+                .action(ArgAction::SetTrue)
+                .groups(["creation", "benchmarking"])
+                .help("Will cause the deletion of test data after completion of the process.")
         )
 
         // FILE LAYOUT
@@ -61,6 +82,7 @@ fn cli_arguments() -> Command {
                 .value_parser(value_parser!(usize))
                 .value_name("integer")
                 .value_hint(ValueHint::Other)
+                .conflicts_with("config")
                 .help("The number of bytes a page must contain.")
         )
         .arg(
@@ -71,9 +93,9 @@ fn cli_arguments() -> Command {
                 .value_parser(value_parser!(u64))
                 .value_name("integer")
                 .value_hint(ValueHint::Other)
+                .conflicts_with("config")
                 .help("Size of a page as specified by $2^{exponent}$ bytes.")
         )
-        // TODO: This should conflict with -p and -P
         .arg(
             Arg::new("book-size")
                 .short('F')
@@ -82,6 +104,7 @@ fn cli_arguments() -> Command {
                 .value_parser(value_parser!(usize))
                 .value_name("integer")
                 .value_hint(ValueHint::Other)
+                .conflicts_with_all(["page-size", "page-count", "config"])
                 .help("Size of files as specified by $2^{exponent}$ bytes. If not a multiple of the page size, the remaining bytes will be be dropped")
         )
         .arg(
@@ -92,6 +115,7 @@ fn cli_arguments() -> Command {
                 .value_parser(value_parser!(u64))
                 .value_name("integer")
                 .value_hint(ValueHint::Other)
+                .conflicts_with("config")
                 .help("Number of books (files) to create.")
         )
         .arg(
@@ -101,6 +125,7 @@ fn cli_arguments() -> Command {
                 .value_parser(value_parser!(String))
                 .value_name("string")
                 .value_hint(ValueHint::Other)
+                .conflicts_with("config")
                 .help("Prefix for generated books (files). Will have form 'prefix##'")
         )
 
@@ -114,6 +139,7 @@ fn cli_arguments() -> Command {
                 .value_parser(value_parser!(u64))
                 .value_name("integer")
                 .value_hint(ValueHint::Other)
+                .conflicts_with("config")
                 .help("Number of generated directories.")
         )
         .arg(
@@ -123,6 +149,7 @@ fn cli_arguments() -> Command {
                 .value_parser(value_parser!(String))
                 .value_name("string")
                 .value_hint(ValueHint::Other)
+                .conflicts_with("config")
                 .help("Prefix for generated directories. Will have the form 'prefix##'")
         )
         .arg(
@@ -132,34 +159,30 @@ fn cli_arguments() -> Command {
                 .value_parser(value_parser!(PathBuf))
                 .value_name("path")
                 .value_hint(ValueHint::FilePath)
+                .conflicts_with("config")
                 .help("Path to the root (parent) directory for the books (directories) of the program input/output.")
         )
 
         // Write Characterization
         .arg(
-            Arg::new("o_direct")
-                .long("direct-io")
-                .action(ArgAction::SetTrue)
-                .help("Will use direct IO (O_DIRECT). Will error if not available or incompatable with other options.")
+            Arg::new("engine")
+                .long("engine")
+                .value_parser(["posix", "direct_io", "mmap", "libaio", "io_uring"])
+                .help("Select the file IO interface to use.")
         )
-        .subcommand(
-            Command::new("create")
-                .about("Create data to be used late with SMIO")
-        )
-        .subcommand(
-            Command::new("bench")
-                .about("Benchmarking mode")
-        )
-
 } 
 
 /// This function handles all aspects of creating the application context
 /// type BookCase. This can be either from a configuration file or from
 /// commandline arguments.
-/// TODO: This should probably return a Result<T,E>
-fn setup_bookcase() -> BookCase {
-    let matches: ArgMatches = cli_arguments().get_matches();
-
+/// TODO: 
+/// - Overwrite config parameters if cli ones are provided
+/// - This should probably return a Result<T,E>
+///     Possible Errors: 
+///         - Cannot Create BookCase
+///         - Config File isn't valid
+///         - Config File doesn't point valid file structures.
+fn setup_bookcase(matches: ArgMatches) -> BookCase {
     if let Some(c) = matches.get_one::<String>("verbosity") {
         println!("[Info] Verbosity Level: {c}");
     }
@@ -168,16 +191,17 @@ fn setup_bookcase() -> BookCase {
     if let Some(config_file) = matches.get_one::<PathBuf>("config") {
         bookcase = BookCase::from_string(config_file.to_str().unwrap());
         if !bookcase.is_assembled() {
-            panic!("Configuration expected files which cannot be found! Check your data directory.")
+            println!("Configuration expected directory/file structure which cannot be found. Creating new one.");
+            bookcase.construct().unwrap();
         }
-    } else {
+    } 
+    else {
         if matches.value_source("path-prefix")
                   .is_some_and(|source| source != ValueSource::CommandLine)
         {
             println!("[Warn] Using default value for prefix path");
 
         }
-
 
         // Set up the file structure
         let pprefix: &PathBuf = matches.get_one::<PathBuf>("path-prefix").unwrap();
@@ -187,7 +211,7 @@ fn setup_bookcase() -> BookCase {
         let fcount: u64     = *matches.get_one("book-count").unwrap();
         let pcount: u64     = *matches.get_one("page-count").unwrap();
         let seed: u64       = *matches.get_one("seed").unwrap();
-        let direct_io: bool = *matches.get_one("o_direct").unwrap();
+        //let direct_io: bool = *matches.get_one("o_direct").unwrap();
 
 
         bookcase = BookCase::new(pprefix.to_owned(), 
@@ -198,18 +222,35 @@ fn setup_bookcase() -> BookCase {
                                  PAGE_BYTES,
                                  pcount,
                                  seed);
-        if direct_io { bookcase.use_direct_io() };
+        //if direct_io { bookcase.use_direct_io() };
 
+        bookcase.write_configuration_file();
+        bookcase.construct().unwrap();
     }
+
     bookcase
 }
 
+fn setup_threads() -> (ThreadPool, usize) {
+    // Set up thread pool
+    let available_cpus: usize = std::thread::available_parallelism().unwrap().into();
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(available_cpus)
+                                              .build()
+                                              .unwrap();
+    (pool, available_cpus)
+}
+
+
 fn main() -> Result<()> {
 
-    let mut bookcase: BookCase = setup_bookcase();
+    let args: ArgMatches = cli_arguments().get_matches();
+    let create_mode: bool = *args.get_one("create").unwrap();
+    let bench_mode:  bool = *args.get_one("bench").unwrap(); 
+    let teardown:    bool = *args.get_one("tear-down").unwrap();
+    
+    let mut bookcase: BookCase = setup_bookcase(args);
 
-    bookcase.construct()?;
-    bookcase.write_configuration_file();
+    // This should check if bookcase even needs creating
     let fcount = bookcase.book_count();
     let pcount = bookcase.page_count();
 
@@ -219,23 +260,25 @@ fn main() -> Result<()> {
     let queue: WorkQueue = WorkQueue::new(fcount*pcount, PAGES_PER_CHAPTER as u64, pcount);
     let chapter = Box::new(Chapter::<P,W,B>::new());
 
+    let (pool, cpus): (ThreadPool, usize) = setup_threads();
 
-    // Set up thread pool
-    let available_cpus: usize = std::thread::available_parallelism().unwrap().into();
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(available_cpus)
-                                              .build()
-                                              .unwrap();
+    if create_mode {
+        pool.install(|| {
+            (0..cpus).into_par_iter()
+                               .for_each(|_|{
+                                   do_write_work::<P,W,B>(queue.clone(), chapter.clone(), bookcase.clone());
+                               });
+        });
+    }
+     
+    if bench_mode {
+        multi_threaded_read(&mut bookcase);
 
-    pool.install(|| {
-        (0..available_cpus).into_par_iter()
-                           .for_each(|_|{
-                               do_write_work::<P,W,B>(queue.clone(), chapter.clone(), bookcase.clone());
-                           });
-    });
+    }
 
-    //multi_threaded_write(&mut bookcase, seed);
-    multi_threaded_read(&mut bookcase);
-    //bookcase.demolish()?;
+    if teardown {
+        bookcase.demolish()?;
+    }
 
     Ok(())
 }
@@ -282,65 +325,6 @@ fn do_write_work<const P:usize, const W: usize, const B: usize>(queue: WorkQueue
 
 }
 
-fn multi_threaded_write(bookcase: &BookCase, seed: u64) {
-    let fcount = bookcase.book_count();
-    let pcount = bookcase.page_count();
-
-    const P: usize = PAGES_PER_CHAPTER;
-    const W: usize = PAGE_BYTES / 8 - 4;
-    const B: usize = Page::<W>::PAGE_BYTES * P;
-
-    let chapter = Box::new(Chapter::<P,W,B>::new());
-
-    let queue: WorkQueue = WorkQueue::new(fcount*pcount, PAGES_PER_CHAPTER as u64, pcount);
-    let mut handles: Vec<thread::JoinHandle<_>> = Vec::new();
-
-    let now: SystemTime = SystemTime::now();
-
-    (0..8).for_each(|_|{
-        let thread_queue = queue.clone();
-        let thread_bookcase = bookcase.clone();
-        let mut thread_chapter = chapter.clone();
-        
-        let handle = thread::spawn(move || {
-
-            while let Some((page, book)) = thread_queue.take_work() {
-
-                if page * book >= thread_queue.capacity { break; }
-                if book >= fcount                       { break; }
-                if page >= pcount                       { break; }
-
-                let mut writable_book: File = thread_bookcase.open_book(book, false, true).expect("Could  not open  file!");
-                if page != 0 {
-                    writable_book.seek(SeekFrom::Start(page * PAGE_BYTES as u64))
-                                 .expect("Unable to seek to write location in book");
-                }
-                
-                let start: u64 = page;
-                let end: u64   = start + thread_queue.step ;
-
-                if end <= pcount {
-                    (start..end).for_each(|p|{
-                        thread_chapter.mutable_page(p % thread_queue.step)
-                                      .reinit(seed, book, p, 0);
-                    });
-
-                    writable_book.write_all(thread_chapter.bytes_all()).unwrap();
-                    writable_book.flush().expect("Could not flush file");
-                }
-            }
-        });
-        handles.push(handle);
-    });
-
-    for handle in handles {
-        handle.join().expect("Cant join");
-
-    }
-
-    let duration: u128 = now.elapsed().unwrap().as_millis();
-    println!("Spent {}ms writing {} bytes", duration, fcount * pcount * PAGE_BYTES as u64);
-}
 
 fn multi_threaded_read(bookcase: &BookCase) {
     let fcount = bookcase.book_count();

@@ -25,15 +25,21 @@ The types of this project are layered to facilitate the layer of interaction at 
 - `page`: Fundamental data type. A 'single unit' of a read and write. This is the level of data integrity and validation.
 - `chapter`: A collection of pages suitable for serialization and batch reading and writing.
 - `book`: A collection of chapters (i.e. a file). Writes/Reads are to/from a book if the size of a chapter.
-- `bookcase`: A collection of books that comprise corpus of benchmark data (i.e. directories)
+- `bookcase`: A collection of books that comprise corpus of benchmark data (i.e. directories). This could be thought of as non-runtime application state. That is everything that could be saved to a configuration file to relaunch the "same" job.
 
 # Development Plan
 
-- [ ] The fundamental data type of the application: 'page' 
+- [X] The fundamental data type of the application: 'page' 
     - data type captures all non-IO operations that can be done on a read/writable unit. That is, modification pre/post IO.
-- [ ] A type for a collection of pages.
+- [X] A type for a collection of pages.
     - All file IO will be done on a collection of pages: [0, n]
-- [ ] Reading and writing of a collection of pages.
+- [X] Reading and writing of a collection of pages.
+- [X] Single threaded; std write
+- [ ] Single threaded; IO_Uring
+- [ ] Multi-threaded; std write
+- [ ] Mulit-threaded; IO_Uring
+- [ ] Multiple IO backends ("engines")
+- [ ] Add multi-process support (Lamellar?)
 
 
 Things I need to do:
