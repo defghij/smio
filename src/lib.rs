@@ -33,7 +33,11 @@ impl WorkQueue {
             step
         }
     }
+
     pub fn take_work(&self) -> Option<(u64, u64)> {
+        // Use Ordering::Relaxed because we dont actually care about the order threads
+        // pull work from the queue-- only that the value is consistent across threads.
+        // That is we require atomic updates ony.
         let work = self.current.fetch_add(self.step, std::sync::atomic::Ordering::Relaxed);
 
         let x: u64 = work % self.window;
@@ -43,5 +47,9 @@ impl WorkQueue {
 
     pub fn update_capacity(&mut self, capacity: u64) {
         self.capacity = capacity;
+    }
+     
+    pub fn reset(&self) {
+        self.current.store(0,std::sync::atomic::Ordering::Release);
     }
 }

@@ -26,13 +26,14 @@ fn cli_arguments() -> Command {
             Arg::new("create")
                 .long("create")
                 .action(ArgAction::SetTrue)
+                .conflicts_with("config")
                 .help("Enables the creation of data.")
         )
         .arg(
             Arg::new("bench")
                 .long("bench")
                 .action(ArgAction::SetTrue)
-                .help("Enables the benchmarking mode (requires previously created data if not used with 'create' flag")
+                .help("Enables the benchmarking mode. Requires '--configuration-file' if not used with 'create' flag")
         )
         .arg(
             Arg::new("verbosity")
@@ -266,13 +267,24 @@ fn main() -> Result<()> {
         pool.install(|| {
             (0..cpus).into_par_iter()
                                .for_each(|_|{
-                                   do_write_work::<P,W,B>(queue.clone(), chapter.clone(), bookcase.clone());
+                                   do_work::<P,W,B>(false, queue.clone(), chapter.clone(), bookcase.clone());
                                });
         });
     }
+
+
+    // Reset/zero heap state
+    queue.clone().reset();
+    chapter.clone().zeroize();
      
+
     if bench_mode {
-        multi_threaded_read(&mut bookcase);
+        pool.install(|| {
+            (0..cpus).into_par_iter()
+                               .for_each(|_|{
+                                   do_work::<P,W,B>(true, queue.clone(), chapter.clone(), bookcase.clone());
+                               });
+        });
 
     }
 
@@ -283,7 +295,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn do_write_work<const P:usize, const W: usize, const B: usize>(queue: WorkQueue, mut chapter: Box<Chapter<P,W,B>>, bookcase: BookCase) {
+fn do_work<const P:usize, const W: usize, const B: usize>(is_read:bool, queue: WorkQueue, mut chapter: Box<Chapter<P,W,B>>, bookcase: BookCase) {
     let seed: u64 = bookcase.seed;
     let fcount = bookcase.book_count();
     let pcount = bookcase.page_count();
@@ -291,95 +303,61 @@ fn do_write_work<const P:usize, const W: usize, const B: usize>(queue: WorkQueue
 
     let now: SystemTime = SystemTime::now();
 
-    while let Some((page, book)) = queue.take_work() {
+    while let Some((page_id, book_id)) = queue.take_work() {
 
-        if page * book >= queue.capacity { break; }
-        if book >= fcount                { break; }
-        if page >= pcount                { break; }
+        if page_id * book_id >= queue.capacity { break; }
+        if book_id >= fcount                { break; }
+        if page_id >= pcount                { break; }
 
-        let mut writable_book: File = bookcase.open_book(book, false, true).expect("Could  not open  file!");
-        if page != 0 {
-            writable_book.seek(SeekFrom::Start(page * PAGE_BYTES as u64))
-                         .expect("Unable to seek to write location in book");
+        let mut book_file: File;
+
+        book_file = bookcase.open_book(book_id, is_read, !is_read).expect("Could  not open  file!");
+
+        if page_id != 0 {
+            book_file.seek(SeekFrom::Start(page_id * PAGE_BYTES as u64))
+                     .expect(&format!("Unable to seek to write location in book {book_id}"));
         }
+
+        if is_read {
+            let buffer: &mut [u8] = chapter.mutable_bytes_all();
+            let bytes_read: usize = book_file.read(buffer).expect("Could not read from file!");
+            if bytes_read == 0 || bytes_read % PAGE_BYTES != 0 { break; } // This should emit a debug
+        }
+                                                                      // message
         
-        let start: u64 = page;
+        let start: u64 = page_id;
         let end: u64   = start + queue.step ;
 
         if end <= pcount {
             (start..end).for_each(|p|{
-                chapter.mutable_page(p % queue.step)
-                              .reinit(seed, book, p, 0);
+                if is_read {
+                    if !chapter.mutable_page(p % queue.step).is_valid() {
+                        let (s, f, p, m) = chapter.mutable_page(p % queue.step).get_metadata();
+                        println!("Invalid Page Found: book {book_id}, page {page_id}");
+                        println!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
+                    } 
+                } else {
+                    chapter.mutable_page(p % queue.step)
+                                  .reinit(seed, book_id, p, 0);
+                }
             });
-
-            writable_book.write_all(chapter.bytes_all()).unwrap();
-            writable_book.flush().expect("Could not flush file");
+            if !is_read {
+                book_file.write_all(chapter.bytes_all()).unwrap();
+                book_file.flush().expect("Could not flush file");
+            }
             work += chapter.byte_count() as u64;
         }
     }
 
     let duration: u128 = now.elapsed().unwrap().as_millis();
-    println!("[tid:{}] Spent {}ms writing {} bytes", rayon::current_thread_index().unwrap(),
-                                                     duration,
-                                                     work);
-
-}
-
-
-fn multi_threaded_read(bookcase: &BookCase) {
-    let fcount = bookcase.book_count();
-    let pcount = bookcase.page_count();
-
-    const P: usize = PAGES_PER_CHAPTER;
-    const W: usize = PAGE_BYTES/ 8 - 4;
-    const B: usize = Page::<W>::PAGE_BYTES * P;
-
-    let chapter = Box::new(Chapter::<P,W,B>::new());
-
-    let queue: WorkQueue = WorkQueue::new(fcount*pcount, PAGES_PER_CHAPTER as u64, pcount);
-    let mut handles: Vec<thread::JoinHandle<_>> = Vec::new();
-
-    let now: SystemTime = SystemTime::now();
-
-    (0..8).for_each(|_|{
-        let thread_queue = queue.clone();
-        let thread_bookcase = bookcase.clone();
-        let mut thread_chapter = chapter.clone();
-        
-        let handle = thread::spawn(move || {
-
-            while let Some((page, book)) = thread_queue.take_work() {
-
-                if page * book >= thread_queue.capacity { break; }
-                if book >= fcount                       { break; }
-                if page >= pcount                       { break; }
-
-                let mut readable_book: File = thread_bookcase.open_book(book, true, false).expect("Could  not open  file!");
-
-                let writable_buffer: &mut [u8] = thread_chapter.mutable_bytes_all();
-                let bytes_read: usize = readable_book.read(writable_buffer).expect("Could not read from file!");
-
-                if bytes_read == 0 || bytes_read % PAGE_BYTES != 0 { break; }
-
-                thread_chapter.pages_all()
-                       .iter()
-                       .for_each(|page|{
-                            if !page.is_valid() {
-                                let (s, f, p, m) = page.get_metadata();
-                                println!("Invalid Page Found: book {book}, page {page}");
-                                println!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
-                            }
-                       });
-            }
-        });
-        handles.push(handle);
-    });
-
-    for handle in handles {
-        handle.join().expect("Cant join");
-
+    if is_read {
+        println!("[tid:{}] Spent {}ms reading {} bytes", rayon::current_thread_index().unwrap_or(0),
+                                                         duration,
+                                                         work);
+    } else {
+        println!("[tid:{}] Spent {}ms writing {} bytes", rayon::current_thread_index().unwrap_or(0),
+                                                         duration,
+                                                         work);
     }
 
-    let duration: u128 = now.elapsed().unwrap().as_millis();
-    println!("Spent {}ms reading {} bytes", duration, fcount * pcount * PAGE_BYTES as u64);
 }

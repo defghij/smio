@@ -159,6 +159,10 @@ pub struct Page<const W: usize> {
         data == self.data
     }
 
+    /// This does uses the instatiated types meta-data to verify the 
+    /// data words. Because the all elements of the meta-data are used
+    /// in data word creation (hash), any corruption in either will
+    /// lead to a negative (false) result.
     pub fn is_valid(&self) -> bool {
         self.validate_page_with(self.seed, self.file, self. page, self.mutations)
     }
