@@ -9,6 +9,7 @@ edition = "2021"
 
 # Local dependencies
 aio-rs = { path = "./aio-rs" }
+#abacus = { path = "../abacus" }
 
 
 
