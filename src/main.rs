@@ -1,9 +1,28 @@
 use std::{ 
-    fs::File, io::{ Read, Result, Seek, SeekFrom, Write }, path::PathBuf, sync::{atomic::AtomicU64, Arc}, thread, time::SystemTime
+    fs::File,
+    io::{ 
+        Read, 
+        Result, 
+        Seek, 
+        SeekFrom, 
+        Write 
+    }, 
+    path::PathBuf, 
+    time::SystemTime
 };
 use clap::{
-    parser::ValueSource, value_parser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint
+    parser::ValueSource, 
+    value_parser, 
+    Arg, 
+    ArgAction,
+    ArgGroup,
+    ArgMatches,
+    Command,
+    ValueHint
 };
+
+use perfcnt::{AbstractPerfCounter, PerfCounter};
+use perfcnt::linux::{PerfCounterBuilderLinux, HardwareEventType};
 
 use rayon::{iter::{IntoParallelIterator, ParallelIterator as _}, ThreadPool};
 use SuperMassiveIO::{
@@ -12,7 +31,10 @@ use SuperMassiveIO::{
     PAGES_PER_CHAPTER,
     page::Page,
     chapter::Chapter,
-    WorkQueue
+    WorkQueue,
+    AccessPattern,
+    SerialAccess,
+    Queue
 };
  
 fn cli_arguments() -> Command {
@@ -243,12 +265,14 @@ fn setup_threads() -> (ThreadPool, usize) {
 
 
 fn main() -> Result<()> {
-
     let args: ArgMatches = cli_arguments().get_matches();
     let create_mode: bool = *args.get_one("create").unwrap();
     let bench_mode:  bool = *args.get_one("bench").unwrap(); 
     let teardown:    bool = *args.get_one("tear-down").unwrap();
-    
+    if !create_mode && !bench_mode {
+        println!("[E] Must provide '--create' and/or '--bench'"); 
+        std::process::exit(-1);
+    }
     let mut bookcase: BookCase = setup_bookcase(args);
 
     // This should check if bookcase even needs creating
@@ -258,44 +282,62 @@ fn main() -> Result<()> {
     const P: usize = PAGES_PER_CHAPTER;
     const W: usize = PAGE_BYTES / 8 - 4;
     const B: usize = Page::<W>::PAGE_BYTES * P;
-    let queue: WorkQueue = WorkQueue::new(fcount*pcount, PAGES_PER_CHAPTER as u64, pcount);
-    let chapter = Box::new(Chapter::<P,W,B>::new());
+    let serial: SerialAccess = SerialAccess::new(0, fcount * pcount, 1, PAGES_PER_CHAPTER as u64);
 
     let (pool, cpus): (ThreadPool, usize) = setup_threads();
 
+
     if create_mode {
+        let cmode_queue: Queue<SerialAccess> = Queue::new(pcount, serial.clone());
+        let cmode_chapter = Box::new(Chapter::<P,W,B>::new());
+
+        let cmode_start: SystemTime = SystemTime::now();
         pool.install(|| {
             (0..cpus).into_par_iter()
                                .for_each(|_|{
-                                   do_work::<P,W,B>(false, queue.clone(), chapter.clone(), bookcase.clone());
+                                   do_work::<P,W,B,SerialAccess>(false, cmode_queue.clone(), cmode_chapter.clone(), bookcase.clone());
                                });
         });
+        let cmode_time: u128 = cmode_start.elapsed().unwrap().as_nanos();
+        println!("[tid:{}] Spent {}ns in Create Mode", rayon::current_thread_index().unwrap_or(0), cmode_time);
     }
 
 
-    // Reset/zero heap state
-    queue.clone().reset();
-    chapter.clone().zeroize();
-     
-
     if bench_mode {
+        let bmode_queue: Queue<SerialAccess> = Queue::new(pcount, serial.clone());
+        let bmode_chapter = Box::new(Chapter::<P,W,B>::new());
+
+        let bmode_start: SystemTime = SystemTime::now();
         pool.install(|| {
             (0..cpus).into_par_iter()
                                .for_each(|_|{
-                                   do_work::<P,W,B>(true, queue.clone(), chapter.clone(), bookcase.clone());
+                                   do_work::<P,W,B,SerialAccess>(true, bmode_queue.clone(), bmode_chapter.clone(), bookcase.clone());
                                });
         });
-
+        let bmode_time: u128 = bmode_start.elapsed().unwrap().as_nanos();
+        println!("[tid:{}] Spent {}ns in Create Mode", rayon::current_thread_index().unwrap_or(0), bmode_time);
     }
 
     if teardown {
         bookcase.demolish()?;
     }
 
+    (0..10).into_iter().for_each(|_|{
+        println!("TODO: get timing of previous queue implementation!");
+    });
+
     Ok(())
 }
 
-fn do_work<const P:usize, const W: usize, const B: usize>(is_read:bool, queue: WorkQueue, mut chapter: Box<Chapter<P,W,B>>, bookcase: BookCase) {
+fn do_work<const P:usize,const W: usize,const B: usize,AccessType>(
+   is_read:bool,
+   queue: Queue<AccessType>,
+   mut chapter: Box<Chapter<P,W,B>>,
+   bookcase: BookCase
+)
+where
+    AccessType: AccessPattern
+{
     let seed: u64 = bookcase.seed;
     let fcount = bookcase.book_count();
     let pcount = bookcase.page_count();
@@ -305,7 +347,7 @@ fn do_work<const P:usize, const W: usize, const B: usize>(is_read:bool, queue: W
 
     while let Some((page_id, book_id)) = queue.take_work() {
 
-        if page_id * book_id >= queue.capacity { break; }
+        if page_id * book_id >= queue.capacity() { break; }
         if book_id >= fcount                { break; }
         if page_id >= pcount                { break; }
 
@@ -326,18 +368,18 @@ fn do_work<const P:usize, const W: usize, const B: usize>(is_read:bool, queue: W
                                                                       // message
         
         let start: u64 = page_id;
-        let end: u64   = start + queue.step ;
+        let end: u64   = start + queue.chunk_size() ;
 
         if end <= pcount {
             (start..end).for_each(|p|{
                 if is_read {
-                    if !chapter.mutable_page(p % queue.step).is_valid() {
-                        let (s, f, p, m) = chapter.mutable_page(p % queue.step).get_metadata();
+                    if !chapter.mutable_page(p % queue.chunk_size()).is_valid() {
+                        let (s, f, p, m) = chapter.mutable_page(p % queue.chunk_size()).get_metadata();
                         println!("Invalid Page Found: book {book_id}, page {page_id}");
                         println!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
                     } 
                 } else {
-                    chapter.mutable_page(p % queue.step)
+                    chapter.mutable_page(p % queue.chunk_size())
                                   .reinit(seed, book_id, p, 0);
                 }
             });

@@ -9,7 +9,6 @@ edition = "2021"
 
 # Local dependencies
 aio-rs = { path = "./aio-rs" }
-#abacus = { path = "../abacus" }
 
 
 
@@ -32,6 +31,7 @@ tempfile = "3"         # Easily create temp files
 
 # Profiling and Debugging
 divan = "0.1.3"        # Easy to use profiling
+perfcnt = "0.8.0"
 stacker = "0.1.15"     # Print stack information during runtime
 
 
