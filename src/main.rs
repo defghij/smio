@@ -225,15 +225,16 @@ fn setup_bookcase(matches: ArgMatches) -> BookCase {
             println!("[Warn] Using default value for prefix path");
 
         }
+        
 
         // Set up the file structure
         let pprefix: &PathBuf = matches.get_one::<PathBuf>("path-prefix").unwrap();
-        let dprefix: String = matches.get_one::<String>("directory-prefix").unwrap().to_string();
-        let fprefix: String = matches.get_one::<String>("book-prefix").unwrap().to_string();
-        let dcount: u64     = *matches.get_one("directory-count").unwrap();
-        let fcount: u64     = *matches.get_one("book-count").unwrap();
-        let pcount: u64     = *matches.get_one("page-count").unwrap();
-        let seed: u64       = *matches.get_one("seed").unwrap();
+        let dprefix: String  = matches.get_one::<String>("directory-prefix").unwrap().to_string();
+        let fprefix: String  = matches.get_one::<String>("book-prefix").unwrap().to_string();
+        let dcount: u64      = *matches.get_one("directory-count").unwrap();
+        let fcount: u64      = *matches.get_one("book-count").unwrap();
+        let pcount: u64      = *matches.get_one("page-count").unwrap();
+        let seed: u64        = *matches.get_one("seed").unwrap();
         //let direct_io: bool = *matches.get_one("o_direct").unwrap();
 
 
