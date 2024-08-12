@@ -1,19 +1,6 @@
-pub mod page;
-pub mod chapter;
-pub mod bookcase;
-pub mod queue;
-
-use std::sync::{Arc, atomic::AtomicU64};
+use std::sync::{atomic::AtomicU64, Arc};
 
 
-pub const PAGE_BYTES: usize         = 4096 /*bytes*/;
-pub const METADATA_BYTES: usize    = page::Page::<0>::METADATA_BYTES;
-pub const DATA_BYTES: usize        = PAGE_BYTES - METADATA_BYTES;
-pub const DATA_WORDS: usize        = DATA_BYTES / std::mem::size_of::<u64>();
-pub const PAGE_COUNT: usize        = 512;
-pub const PAGES_PER_CHAPTER: usize = 256;
-
-pub type PageBytes = [u8; PAGE_BYTES];
 
 #[derive(Clone)]
 pub struct SimpleQueue { 
@@ -108,27 +95,27 @@ impl SerialAccess {
     #[inline(always)]
     fn lower_bound(&self)  -> u64 { self.0.lower_bound  }
     #[inline(always)]
-    fn set_lower_bound(&self)  -> u64 { self.0.lower_bound  }
+    fn set_lower_bound(&self) { self.0.lower_bound;  }
 
     #[inline(always)]
     fn upper_bound(&self)  -> u64 { self.0.upper_bound  }
     #[inline(always)]
-    fn set_upper_bound(&self)  -> u64 { self.0.upper_bound  }
+    fn set_upper_bound(&self) { self.0.upper_bound;  }
 
     #[inline(always)]
     fn stride(&self)       -> u64 { self.0.stride       }
     #[inline(always)]
-    fn set_stride(&self)       -> u64 { self.0.stride       }
+    fn set_stride(&self)       { self.0.stride;       }
 
     #[inline(always)]
     fn access_size(&self)  -> u64 { self.0.access_size  }
     #[inline(always)]
-    fn set_access_size(&self)  -> u64 { self.0.access_size  }
+    fn set_access_size(&self)  { self.0.access_size;  }
 
     #[inline(always)]
     fn access_count(&self) -> u64 { self.0.access_count }
     #[inline(always)]
-    fn set_access_count(&self) -> u64 { self.0.access_count }
+    fn set_access_count(&self) { self.0.access_count; }
 }
 
 
