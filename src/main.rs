@@ -1,44 +1,32 @@
 use std::{ 
-    fs::File,
-    io::{ 
+    fs::File, io::{ 
         Read, 
         Result, 
         Seek, 
         SeekFrom, 
         Write 
-    }, 
-    path::PathBuf, 
-    time::SystemTime
+    }, path::PathBuf, sync::Arc, time::{Duration, SystemTime}
 };
 use clap::{
     parser::ValueSource, 
     value_parser, 
     Arg, 
     ArgAction,
-    ArgGroup,
+//    ArgGroup,
     ArgMatches,
     Command,
     ValueHint
 };
 
-use perfcnt::{AbstractPerfCounter, PerfCounter};
-use perfcnt::linux::{PerfCounterBuilderLinux, HardwareEventType};
+//use perfcnt::{AbstractPerfCounter, PerfCounter};
+//use perfcnt::linux::{PerfCounterBuilderLinux, HardwareEventType};
 
 use rayon::{iter::{IntoParallelIterator, ParallelIterator as _}, ThreadPool};
 use SuperMassiveIO::{
-    bookcase::BookCase,
-    PAGE_BYTES,
-    PAGES_PER_CHAPTER,
-    page::Page,
-    chapter::Chapter,
-    WorkQueue,
-    AccessPattern,
-    SerialAccess,
-    Queue
+    bookcase::BookCase, chapter::Chapter, page::Page, queue::{AccessPattern, Queue, SerialAccess, WorkQueue}, PAGES_PER_CHAPTER, PAGE_BYTES
 };
  
 fn cli_arguments() -> Command {
-
     Command::new("SuperMassiveIO")
         .about("Research application into File System IO")
         .version("0.1.0")
@@ -89,7 +77,7 @@ fn cli_arguments() -> Command {
         )
         .arg(
             Arg::new("tear-down")
-                .long("destroy-after")
+                .long("teardown")
                 .action(ArgAction::SetTrue)
                 .groups(["creation", "benchmarking"])
                 .help("Will cause the deletion of test data after completion of the process.")
@@ -193,6 +181,14 @@ fn cli_arguments() -> Command {
                 .value_parser(["posix", "direct_io", "mmap", "libaio", "io_uring"])
                 .help("Select the file IO interface to use.")
         )
+        
+        // TODO: Temporary
+        .arg(
+            Arg::new("verify")
+                .long("verify")
+                .action(ArgAction::SetTrue)
+                .help("Use slow, single-threaded, but sound read/verify function to check writes.")
+        )
 } 
 
 /// This function handles all aspects of creating the application context
@@ -251,7 +247,7 @@ fn setup_bookcase(matches: ArgMatches) -> BookCase {
         bookcase.write_configuration_file();
         bookcase.construct().unwrap();
     }
-
+    
     bookcase
 }
 
@@ -264,16 +260,32 @@ fn setup_threads() -> (ThreadPool, usize) {
     (pool, available_cpus)
 }
 
+pub enum Mode {
+    Create,
+    Bench,
+    Verify,
+    Teardown,
+} impl Mode {
+    fn to_str(&self) -> &str {
+        match self {
+            Mode::Create => "Create",
+            Mode::Bench => "Bench",
+            Mode::Verify => "Verify",
+            Mode::Teardown => "Teardown",
+        }
+
+    }
+
+}
 
 fn main() -> Result<()> {
     let args: ArgMatches = cli_arguments().get_matches();
-    let create_mode: bool = *args.get_one("create").unwrap();
-    let bench_mode:  bool = *args.get_one("bench").unwrap(); 
-    let teardown:    bool = *args.get_one("tear-down").unwrap();
-    if !create_mode && !bench_mode {
-        println!("[E] Must provide '--create' and/or '--bench'"); 
-        std::process::exit(-1);
-    }
+    let mut modes: Vec<Mode> = Vec::new();
+    if *args.get_one("create").unwrap()    { modes.push(Mode::Create); }
+    if *args.get_one("bench").unwrap()     { modes.push(Mode::Bench); }
+    if *args.get_one("verify").unwrap()    { modes.push(Mode::Verify); }
+    if *args.get_one("tear-down").unwrap() { modes.push(Mode::Teardown); }
+
     let mut bookcase: BookCase = setup_bookcase(args);
 
     // This should check if bookcase even needs creating
@@ -287,74 +299,60 @@ fn main() -> Result<()> {
 
     let (pool, cpus): (ThreadPool, usize) = setup_threads();
 
+    modes.iter()
+         .for_each(|mode| { 
 
-    if create_mode {
-        let cmode_queue: Queue<SerialAccess> = Queue::new(pcount, serial.clone());
-        let cmode_chapter = Box::new(Chapter::<P,W,B>::new());
-
-        let cmode_start: SystemTime = SystemTime::now();
-        pool.install(|| {
-            (0..cpus).into_par_iter()
-                               .for_each(|_|{
-                                   do_work::<P,W,B,SerialAccess>(false, cmode_queue.clone(), cmode_chapter.clone(), bookcase.clone());
-                               });
-        });
-        let cmode_time: u128 = cmode_start.elapsed().unwrap().as_nanos();
-        println!("[tid:{}] Spent {}ns in Create Mode", rayon::current_thread_index().unwrap_or(0), cmode_time);
-    }
-
-
-    if bench_mode {
-        let bmode_queue: Queue<SerialAccess> = Queue::new(pcount, serial.clone());
-        let bmode_chapter = Box::new(Chapter::<P,W,B>::new());
-
-        let bmode_start: SystemTime = SystemTime::now();
-        pool.install(|| {
-            (0..cpus).into_par_iter()
-                               .for_each(|_|{
-                                   do_work::<P,W,B,SerialAccess>(true, bmode_queue.clone(), bmode_chapter.clone(), bookcase.clone());
-                               });
-        });
-        let bmode_time: u128 = bmode_start.elapsed().unwrap().as_nanos();
-        println!("[tid:{}] Spent {}ns in Create Mode", rayon::current_thread_index().unwrap_or(0), bmode_time);
-    }
-
-    if teardown {
-        bookcase.demolish()?;
-    }
-
-    (0..10).into_iter().for_each(|_|{
-        println!("TODO: get timing of previous queue implementation!");
-    });
+            let mode_start: SystemTime = SystemTime::now();
+            match mode {
+               Mode::Create | Mode::Bench => {
+                   let queue: Queue<SerialAccess> = Queue::new(pcount, serial.clone());
+                   let chapter = Box::new(Chapter::<P,W,B>::new());
+                   pool.install(|| {
+                       (0..cpus).into_par_iter()
+                                .for_each(|_|{
+                                    thread_worker::<P,W,B,SerialAccess>(mode, 
+                                                                        queue.clone(), 
+                                                                        chapter.clone(), 
+                                                                        bookcase.clone()
+                                                                        );
+                                });
+                   });
+               },
+               Mode::Verify => single_threaded_verify(&bookcase),
+               Mode::Teardown => bookcase.demolish().expect("Could not teardown files setup by application"),
+            }
+            let mode_time: u128 = mode_start.elapsed().unwrap().as_nanos();
+            println!("[tid:{}][{}] {}ns total", rayon::current_thread_index().unwrap_or(0), mode.to_str(), mode_time);
+         });
 
     Ok(())
 }
 
-fn do_work<const P:usize,const W: usize,const B: usize,AccessType>(
-   is_read:bool,
-   queue: Queue<AccessType>,
+fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
+   mode: &Mode,
+   queue: Queue<T>,
    mut chapter: Box<Chapter<P,W,B>>,
    bookcase: BookCase
 )
-where
-    AccessType: AccessPattern
 {
     let seed: u64 = bookcase.seed;
     let fcount = bookcase.book_count();
     let pcount = bookcase.page_count();
     let mut work: u64 = 0;
+    let is_read: bool = match mode {
+        Mode::Bench => true,
+        _ => false
+    };
 
-    let now: SystemTime = SystemTime::now();
+    let mode_start: SystemTime = SystemTime::now();
 
     while let Some((page_id, book_id)) = queue.take_work() {
 
         if page_id * book_id >= queue.capacity() { break; }
-        if book_id >= fcount                { break; }
-        if page_id >= pcount                { break; }
-
-        let mut book_file: File;
-
-        book_file = bookcase.open_book(book_id, is_read, !is_read).expect("Could  not open  file!");
+        if book_id >= fcount                     { break; }
+        if page_id >= pcount                     { break; }
+        let mut book_file: File = bookcase.open_book(book_id, is_read, !is_read)
+                                          .expect("Could  not open  file!");
 
         if page_id != 0 {
             book_file.seek(SeekFrom::Start(page_id * PAGE_BYTES as u64))
@@ -365,8 +363,7 @@ where
             let buffer: &mut [u8] = chapter.mutable_bytes_all();
             let bytes_read: usize = book_file.read(buffer).expect("Could not read from file!");
             if bytes_read == 0 || bytes_read % PAGE_BYTES != 0 { break; } // This should emit a debug
-        }
-                                                                      // message
+        }  
         
         let start: u64 = page_id;
         let end: u64   = start + queue.chunk_size() ;
@@ -392,15 +389,57 @@ where
         }
     }
 
-    let duration: u128 = now.elapsed().unwrap().as_millis();
-    if is_read {
-        println!("[tid:{}] Spent {}ms reading {} bytes", rayon::current_thread_index().unwrap_or(0),
-                                                         duration,
-                                                         work);
-    } else {
-        println!("[tid:{}] Spent {}ms writing {} bytes", rayon::current_thread_index().unwrap_or(0),
-                                                         duration,
-                                                         work);
-    }
+    let nanos = mode_start.elapsed().unwrap().as_nanos();
+    println!("[tid:{}][{}] {}ns, {} bytes, {} ns/byte", rayon::current_thread_index().unwrap_or(0),
+                                                        mode.to_str(),
+                                                        nanos,
+                                                        work,
+                                                        nanos / work as u128);
+}
 
+
+// Keep this function around as a secondary check on 
+// multi-threaded read and verify.
+// Eventually this should be replaced with a multi-threaded
+// monotonic read-only access pattern worker
+fn single_threaded_verify(bookcase: &BookCase) {
+    let fcount = bookcase.book_count();
+
+    const P: usize = PAGES_PER_CHAPTER;
+    const W: usize = PAGE_BYTES / 8 - 4;
+    const B: usize = Page::<W>::PAGE_BYTES * P;
+    let mut work: u64 = 0;
+
+    let mut chapter = Box::new(Chapter::<P,W,B>::new());
+    let now: SystemTime = SystemTime::now();
+
+    // Read from a File
+    (0..fcount).into_iter()
+               .for_each(|book| { 
+                    let mut readable_book: File = bookcase.open_book(book, true, false).expect("Could  not open  file!");
+
+                    loop {
+                        let writable_buffer: &mut [u8] = chapter.mutable_bytes_all();
+                        let bytes_read: usize = readable_book.read(writable_buffer).expect("Could not read from file!");
+
+                        if bytes_read == 0 || bytes_read % PAGE_BYTES != 0 { break; }
+
+                        chapter.pages_all()
+                               .iter()
+                               .for_each(|page|{
+                                    if !page.is_valid() {
+                                        let (s, f, p, m) = page.get_metadata();
+                                        println!("Invalid Page Found: book {book}, page {page}");
+                                        println!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
+                                    }
+                               });
+                        work += chapter.byte_count() as u64;
+                    }
+               });
+    let elapsed: Duration = now.elapsed().unwrap();
+    let nanos = elapsed.as_nanos();
+    println!("[tid:{}][read] {}ns, {} bytes, {} ns/byte", rayon::current_thread_index().unwrap_or(0),
+                                                     nanos,
+                                                     work,
+                                                     nanos / work as u128);
 }
