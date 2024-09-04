@@ -1,5 +1,6 @@
 use std::{cell::Cell, sync::atomic::{AtomicU64, AtomicBool, AtomicUsize}};
 use std::sync::atomic::Ordering;
+use indicatif::HumanBytes;
 
 pub mod page;
 pub mod chapter;
@@ -91,15 +92,15 @@ static NEXT_THREAD_ID: AtomicUsize = AtomicUsize::new(1);
 // each thread adds up to the expected number of bytes. 
 
 pub struct Inspector {
-    updating: AtomicBool,
+    locked: AtomicBool,
     samples: Samples, 
-    inspectors: usize
+    inspectors: usize,
 } 
 impl Inspector {
 
     pub fn new(thread_count: usize) -> Inspector {
         Inspector {
-            updating: AtomicBool::new(false),
+            locked: AtomicBool::new(false),
             samples: Samples::new(thread_count),
             inspectors: thread_count
         }
@@ -126,7 +127,7 @@ impl Inspector {
 
     #[inline(always)]
     fn wait_for_unlock(&self) {
-        while self.updating.load(Ordering::SeqCst) {}
+        while self.locked.load(Ordering::SeqCst) {}
     }
     
     fn blocking<F>(&self, operation: F) -> Result<(), ()> 
@@ -135,11 +136,11 @@ impl Inspector {
         // Once we get past this spin we know self.updating := true and its from _our_ cmpxchg.
         // i.e. spin until we acquire lock.
         // TODO: Deadlock detection?
-        while self.updating.compare_exchange(false, true, Ordering::SeqCst, Ordering::Acquire).is_err() {}
+        while self.locked.compare_exchange(false, true, Ordering::SeqCst, Ordering::Acquire).is_err() {}
 
         operation()?;
 
-        self.updating.store(false, Ordering::Relaxed); // Release lock
+        self.locked.store(false, Ordering::Relaxed); // Release lock
         Ok(())
     }
 
@@ -147,9 +148,9 @@ impl Inspector {
     where 
         F: FnOnce() -> Result<(), ()>
     {
-        if self.updating.compare_exchange(false, true, Ordering::SeqCst, Ordering::Acquire).is_ok() {
+        if self.locked.compare_exchange(false, true, Ordering::SeqCst, Ordering::Acquire).is_ok() {
             operation()?;
-            self.updating.store(false, Ordering::Relaxed);
+            self.locked.store(false, Ordering::Relaxed);
             Ok(())
         } else {
             Err(())
@@ -217,6 +218,12 @@ impl Inspector {
         self.wait_for_unlock();
         let _ = self.flush();
         let total: u64 = self.samples.get(self.inspectors).unwrap_or(0);
-        format!("{} total", total)
+        format!("{} total", HumanBytes(total))
+    }
+
+    pub fn get_global_total(&self) -> u64 {
+        self.wait_for_unlock();
+        let _ = self.flush();
+        self.samples.get(self.inspectors).unwrap_or(0)
     }
 }

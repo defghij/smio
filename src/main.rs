@@ -24,6 +24,7 @@ use clap::{
 //use perfcnt::{AbstractPerfCounter, PerfCounter};
 //use perfcnt::linux::{PerfCounterBuilderLinux, HardwareEventType};
 
+use indicatif::{HumanBytes, HumanDuration};
 use rayon::{
     iter::{
         IntoParallelIterator,
@@ -364,7 +365,6 @@ fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
     let seed: u64 = bookcase.seed;
     let fcount = bookcase.book_count();
     let pcount = bookcase.page_count();
-    let mut work: u64 = 0;
     let is_read: bool = match mode {
         Mode::Bench => true,
         _ => false
@@ -417,7 +417,6 @@ fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
             }
 
             let bytes_completed: u64 = chapter.byte_count() as u64;
-            work += bytes_completed;
             if metrics.update(bytes_completed).is_err() {
                 println!("[tid:{}][{}] Warning: Unable to update bytes completed for thread", thread_id,
                                                                                               mode.to_str());
@@ -425,25 +424,23 @@ fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
             }
         }
 
-        if thread_id == 0 && 990 <= sample_timer.elapsed().unwrap().as_millis() {
+        if thread_id == 0 && 999 <= sample_timer.elapsed().unwrap().as_millis() {
             if metrics.flush().is_ok() { 
-                println!("[tid:{}][{}] {}", thread_id, 
+                // TODO: This reporting should be integrated into Inspector
+                let total_work = metrics.get_global_total();
+                let total_time = mode_start.elapsed().unwrap();
+                println!("[tid:{}][{}] {}, {}, {}/s, {:.2} ns/byte", thread_id, 
                                             mode.to_str(),
-                                            metrics.get_report_global());
+                                            HumanBytes(total_work),
+                                            HumanDuration(total_time),
+                                            HumanBytes((total_work as f64 / total_time.as_secs() as f64) as u64),
+                                            total_time.as_nanos() as f64 / total_work as f64);
             } else {
                 println!("[tid:{}][{}] Warning: Unable sync metrics between threads", thread_id, mode.to_str()) 
             }
             sample_timer = SystemTime::now();
         }
     }
-
-    let nanos = mode_start.elapsed().unwrap().as_nanos() as f64;
-    println!("[tid:{}][{}] Finished: {}ns, {} bytes, {:.2} ns/byte", thread_id,
-                                                        mode.to_str(),
-                                                        nanos,
-                                                        work,
-                                                        nanos / work as f64);
-    //let _ = metrics.flush();
 }
 
 
@@ -487,8 +484,8 @@ fn single_threaded_verify(bookcase: &BookCase) {
                });
     let elapsed: Duration = now.elapsed().unwrap();
     let nanos = elapsed.as_nanos();
-    println!("[tid:{}][read] {}ns, {} bytes, {} ns/byte", rayon::current_thread_index().unwrap_or(0),
-                                                     nanos,
-                                                     work,
+    println!("[tid:{}][read] {}, {}, {} ns/byte", rayon::current_thread_index().unwrap_or(0),
+                                                     HumanDuration(elapsed),
+                                                     HumanBytes(work),
                                                      nanos / work as u128);
 }
