@@ -5,7 +5,10 @@ use std::{
         Seek, 
         SeekFrom, 
         Write 
-    }, path::PathBuf, sync::Arc, time::{Duration, SystemTime}
+    }, 
+    path::PathBuf, 
+    sync::Arc, 
+    time::{ Duration, SystemTime }
 };
 use clap::{
     parser::ValueSource, 
@@ -21,9 +24,26 @@ use clap::{
 //use perfcnt::{AbstractPerfCounter, PerfCounter};
 //use perfcnt::linux::{PerfCounterBuilderLinux, HardwareEventType};
 
-use rayon::{iter::{IntoParallelIterator, ParallelIterator as _}, ThreadPool};
+use rayon::{
+    iter::{
+        IntoParallelIterator,
+        ParallelIterator as _
+    }, 
+    ThreadPool
+};
 use SuperMassiveIO::{
-    bookcase::BookCase, chapter::Chapter, page::Page, queue::{AccessPattern, Queue, SerialAccess, WorkQueue}, PAGES_PER_CHAPTER, PAGE_BYTES
+    bookcase::BookCase,
+    chapter::Chapter,
+    page::Page,
+    queue::{
+        AccessPattern, 
+        Queue, 
+        SerialAccess, 
+        WorkQueue
+    }, 
+    Inspector, 
+    PAGES_PER_CHAPTER, 
+    PAGE_BYTES
 };
  
 fn cli_arguments() -> Command {
@@ -275,7 +295,6 @@ pub enum Mode {
         }
 
     }
-
 }
 
 fn main() -> Result<()> {
@@ -299,42 +318,49 @@ fn main() -> Result<()> {
 
     let (pool, cpus): (ThreadPool, usize) = setup_threads();
 
-    modes.iter()
-         .for_each(|mode| { 
 
+    modes.iter()
+        .for_each(|mode| { 
             let mode_start: SystemTime = SystemTime::now();
             match mode {
                Mode::Create | Mode::Bench => {
                    let queue: Queue<SerialAccess> = Queue::new(pcount, serial.clone());
                    let chapter = Box::new(Chapter::<P,W,B>::new());
+                   let metrics: Arc<Inspector> = Arc::new(Inspector::new(cpus));
                    pool.install(|| {
                        (0..cpus).into_par_iter()
                                 .for_each(|_|{
                                     thread_worker::<P,W,B,SerialAccess>(mode, 
                                                                         queue.clone(), 
                                                                         chapter.clone(), 
-                                                                        bookcase.clone()
+                                                                        bookcase.clone(),
+                                                                        metrics.clone()
                                                                         );
                                 });
                    });
+                   let _ = metrics.flush();
+                   
+                   println!("Summary: {}", metrics.get_report_global());
                },
-               Mode::Verify => single_threaded_verify(&bookcase),
+               Mode::Verify   => single_threaded_verify(&bookcase),
                Mode::Teardown => bookcase.demolish().expect("Could not teardown files setup by application"),
             }
+
             let mode_time: u128 = mode_start.elapsed().unwrap().as_nanos();
             println!("[tid:{}][{}] {}ns total", rayon::current_thread_index().unwrap_or(0), mode.to_str(), mode_time);
-         });
-
+        });
     Ok(())
 }
+
 
 fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
    mode: &Mode,
    queue: Queue<T>,
    mut chapter: Box<Chapter<P,W,B>>,
-   bookcase: BookCase
-)
-{
+   bookcase: BookCase,
+   metrics: Arc<Inspector>
+) {
+    let thread_id: usize = rayon::current_thread_index().unwrap_or(0);
     let seed: u64 = bookcase.seed;
     let fcount = bookcase.book_count();
     let pcount = bookcase.page_count();
@@ -344,7 +370,10 @@ fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
         _ => false
     };
 
+    metrics.register_thread();
+
     let mode_start: SystemTime = SystemTime::now();
+    let mut sample_timer: SystemTime = SystemTime::now();
 
     while let Some((page_id, book_id)) = queue.take_work() {
 
@@ -378,23 +407,43 @@ fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
                     } 
                 } else {
                     chapter.mutable_page(p % queue.chunk_size())
-                                  .reinit(seed, book_id, p, 0);
+                           .reinit(seed, book_id, p, 0);
                 }
             });
+
             if !is_read {
                 book_file.write_all(chapter.bytes_all()).unwrap();
                 book_file.flush().expect("Could not flush file");
             }
-            work += chapter.byte_count() as u64;
+
+            let bytes_completed: u64 = chapter.byte_count() as u64;
+            work += bytes_completed;
+            if metrics.update(bytes_completed).is_err() {
+                println!("[tid:{}][{}] Warning: Unable to update bytes completed for thread", thread_id,
+                                                                                              mode.to_str());
+
+            }
+        }
+
+        if thread_id == 0 && 990 <= sample_timer.elapsed().unwrap().as_millis() {
+            if metrics.flush().is_ok() { 
+                println!("[tid:{}][{}] {}", thread_id, 
+                                            mode.to_str(),
+                                            metrics.get_report_global());
+            } else {
+                println!("[tid:{}][{}] Warning: Unable sync metrics between threads", thread_id, mode.to_str()) 
+            }
+            sample_timer = SystemTime::now();
         }
     }
 
-    let nanos = mode_start.elapsed().unwrap().as_nanos();
-    println!("[tid:{}][{}] {}ns, {} bytes, {} ns/byte", rayon::current_thread_index().unwrap_or(0),
+    let nanos = mode_start.elapsed().unwrap().as_nanos() as f64;
+    println!("[tid:{}][{}] Finished: {}ns, {} bytes, {:.2} ns/byte", thread_id,
                                                         mode.to_str(),
                                                         nanos,
                                                         work,
-                                                        nanos / work as u128);
+                                                        nanos / work as f64);
+    //let _ = metrics.flush();
 }
 
 
