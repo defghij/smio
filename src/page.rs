@@ -114,8 +114,8 @@ pub struct Page<const W: usize> {
     /// Creates an empty, zeroed, Page.
     pub fn default() -> Page<W> {
         Page::<W> {
-            file: 0,
             seed: 0,
+            file: 0,
             page: 0,
             mutations: 0,
             data: [0u64; W]
@@ -241,38 +241,6 @@ impl<const W:usize> PartialEq for Page<W> {
     }
 }
 
-/// `&Page<W>` --> `&[u8]`
-impl<'a, const W:usize> TryFrom<&'a Page<W>> for &'a [u8] {
-    type Error = bytemuck::PodCastError;
-    fn try_from(value: &'a Page<W>) -> Result<Self, Self::Error> {
-        Ok(bytemuck::bytes_of(value))
-    }
-}
-
-/// Slice conversion: &[u8] --> &Page<W>
-impl<'a, const W:usize> TryFrom<&'a [u8]> for &'a Page<W> {
-    type Error = bytemuck::PodCastError;
-    fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
-        bytemuck::try_from_bytes(value)
-    }
-}
-
-/// Array conversion: &[u8;N] --> &Page<W>
-impl<'a, const N: usize, const W:usize> TryFrom<&'a [u8;N]> for &'a Page<W> {
-    type Error = bytemuck::PodCastError;
-    fn try_from(value: &'a [u8; N]) -> Result<Self, Self::Error> {
-        bytemuck::try_from_bytes(value)
-    }
-}
-
-/// Vector conversion: &Vec<u8> --> &Page<W>
-impl<'a, const W:usize> TryFrom<&'a Vec<u8>> for &'a Page<W> {
-    type Error = bytemuck::PodCastError;
-    fn try_from(value: &'a Vec<u8>) -> Result<Self, Self::Error> {
-        bytemuck::try_from_bytes(value)
-    }
-}
-
 impl<const W:usize> fmt::Display for Page<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Seed:    0x{:016X}\n", self.seed)?;
@@ -302,335 +270,56 @@ unsafe impl<const W:usize> Zeroable for Page<W> {
 /// These tests confirm that general funcationality of the Page type,
 /// primarily the Page<W> --> Page<W> functions, word as expected.
 
-#[test]
-fn general_functionality() {
-    let mut page: Page<1> = Page::new(0xdead+0xbeef, 1, 1);
+mod validation {
+
+    #[test]
+    fn seed_alterations() {
+        use super::Page;
+        let mut page: Page<1> = Page::new(0xdead+0xbeef, 1, 1);
 
 
-    page.reinit(0xdead, 1, 1, 0);
-    let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead, 1, 1, 0));
-    assert!(page.data == bytes, "reinit failed");
+        // Check that reinit generates the right Page data
+        page.reinit(0xdead, 1, 1, 0);
+        let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead, 1, 1, 0));
+        assert!(page.data == bytes, "reinit failed");
 
+        // Verify that mutate modifies the assembled seed correctly.
+        page.mutate();
+        let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead, 1, 1, 1));
+        assert!(page.data == bytes, "mutate seed failed");
 
-    page.mutate();
-    let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead, 1, 1, 1));
-    assert!(page.data == bytes, "mutate seed failed");
-
-    
-    page.update_file(0);
-    let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead+1, 0, 1, 0));
-    assert!(page.data == bytes, "mutate file failed");
-
-
-    page.update_page(0);
-    let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead+1, 0, 0, 0));
-    assert!(page.data == bytes, "mutate page failed");
-
-
-    assert!(Page::<0>::PAGE_BYTES == std::mem::size_of::<Page<0>>(), "{} != {}",Page::<0>::PAGE_BYTES, std::mem::size_of::<Page<0>>()) ;
-    assert!(Page::<4096>::PAGE_BYTES == std::mem::size_of::<Page<4096>>(), "{} != {}",Page::<4096>::PAGE_BYTES, std::mem::size_of::<Page<4096>>()) ;
-}
-
-
-#[allow(dead_code)]
-/// These tests serve both as correctness tests and 
-/// as explorations into different methods to convert between types.
-/// In the latter way they are correct, though perhaps not idomatic,
-/// ways to convert between different types of interest.
-/// 
-/// There are three categories of tests: to bytes, from bytes, and both ways.
-/// In the final case, this relies on some intermediate type or structure (i.e
-/// the file system).
-mod transmutation {
-    pub const S: u64  = 0xD7D6D5D4D3D2D1D0;
-    pub const F: u64  = 0xC7C6C5C4C3C2C1C0;
-    pub const P: u64  = 0xB7B6B5B4B3B2B1B0;
-    pub const M: u64  = 0x0000000000000000;
-    pub const D1: u64 = 0xAFDF3EC403080884;
-    pub const D2: u64 = 0xD127816C6EF096AB;
-
-    mod to_u8 {
-        /// Test different ways of converting from Page<Words> to [u8]
-        #[test]
-        fn single_page() {
-            use super::{
-                S, F, P,
-                super::Page
-            };
-            use bytemuck;
-            let flat_tv: [u8; 40]  = [
-            //  b00   b01   b02   b03   b04   b05   b06   b07 
-                0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,  // seed
-                0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,  // file
-                0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7,  // page
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // mutations
-                0x84, 0x08, 0x08, 0x03, 0xC4, 0x3E, 0xDF, 0xAF,  // data
-            ];
-            const W: usize = 1;
-
-            // `&Page<W>` --> `&[u8]`
-            let page: Page<W> = Page::new(S, F, P);
-            let bytes: &[u8] = bytemuck::bytes_of(&page);
-            assert!(&flat_tv == bytes);
-
-            // `Box<Page<W>>` --> `&[u8]`
-            let page: Page<W> = Page::new(S, F, P);
-            let page_box: Box<Page<W>> = Box::new(page);
-            let bytes: &[u8] = bytemuck::bytes_of(page_box.as_ref());
-            assert!(&flat_tv == bytes.as_ref());
-
-            // test that the pointers for `Box<Page<W>>` --> `&[u8]` are the same.
-            let page_box_ptr: *const Page<W> = &*page_box;
-            let bytes_ptr: *const [u8] = &*bytes;
-            assert!(format!("{page_box_ptr:?}") == format!("{bytes_ptr:?}"), "Pointers are not equal: {page_box_ptr:?} != {bytes_ptr:?}");
-           
-
-            // `Box<Page<W>>` --> `&[u8]`
-            let bytes: &[u8] = page_box.as_ref().try_into().expect("Unable to convert");
-            assert!(&flat_tv == bytes);
-        }
-
-        #[test]
-        fn two_pages() {
-            use super::{
-                S, F, P,
-                super::Page
-            };
-            let flat_tv  = vec![
-            // Page One
-            //  b00   b01   b02   b03   b04   b05   b06   b07 
-                0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,  // seed
-                0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,  // file
-                0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7,  // page
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // mutations
-                0x84, 0x08, 0x08, 0x03, 0xC4, 0x3E, 0xDF, 0xAF,  //  data
-            // Page Two
-            //  b00   b01   b02   b03   b04   b05   b06   b07 
-                0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,  // seed
-                0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,  // file
-                0xB1, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7,  // page
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // mutations
-                0xAB, 0x96, 0xF0, 0x6E, 0x6C, 0x81, 0x27, 0xD1,  // data
-            ];
-            const W: usize = 1;
-            const PAGES: usize = 2;
-
-
-            // `&[Page<Words>; 2]` --> `&[u8]`
-            let page1: Page<W> = Page::new(S, F, P);
-            let page2: Page<W> = Page::new(S, F, P + 1);
-            let pages: [Page<W>; 2] = [page1, page2];
-
-            let bytes: &[u8] = bytemuck::bytes_of(&pages);
-            assert!(flat_tv == bytes);
-
-            
-            // `[Page<W>; PAGES]` --> `Vec<u8>`
-            let bytes: Vec<u8> = pages.iter().flat_map(|p| {
-                let bytes: &[u8] = p.try_into().expect("Unable to convert");
-                bytes.to_vec()
-            }).collect();
-            assert!(flat_tv == bytes);
-
-
-            // `Box<[Page<W>]>` --> `&[u8]`
-            let pages: Box<[Page<W>]> = Box::new([
-                Page::new(S, F, P), Page::new(S, F, P+1)
-            ]);
-            let bytes: &[u8] = bytemuck::bytes_of(TryInto::<&[Page<W>;PAGES]>::try_into(pages.as_ref()).expect("Unable to convert"));
-            assert!(flat_tv == bytes);
-            
-
-            // `Vec<Page<W>>` --> `Vec<u8>`
-            let mut pages: Vec<Page<W>> = Vec::with_capacity(PAGES);
-            pages.push(Page::new(S, F, P));
-            pages.push(Page::new(S, F, P+1));
-           
-            let bytes: Vec<u8> = pages.clone()
-                                      .into_boxed_slice()
-                                      .iter()
-                                      .flat_map(|p| {
-                                          let pbytes: &[u8] = p.try_into().expect("Unable to convert");
-                                          pbytes.to_vec()
-                                      })
-                                      .collect();
-            assert!(flat_tv == bytes);
-            
-            // `Vec<Page<W>>` --> `Vec<u8>`
-            let bytes: Vec<u8> = pages.into_iter()
-                                      .map(|p |{ <&Page<W> as TryInto<&[u8]>>::try_into(&p).expect("Unable to convert").to_vec() })
-                                      .flatten()
-                                      .collect();
-            assert!(flat_tv == bytes);
-        }
-    }
-
-    mod from_u8 {
-        #[test]
-        fn single_page() {
-            use super::{
-                S, F, P,
-                super::Page
-            };
-            let flat_tv: [u8; 40]  = [
-            //  b00   b01   b02   b03   b04   b05   b06   b07 
-                0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,  // seed
-                0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,  // file
-                0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7,  // page
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // mutations
-                0x84, 0x08, 0x08, 0x03, 0xC4, 0x3E, 0xDF, 0xAF,  // data
-            ];
-            const W: usize = 1;
-            let page_tv: Page<W> = Page::new(S, F, P);
-
-            // Test different single page transformations
-            let pages: [&Page<W>; 4] = [
-                bytemuck::try_from_bytes(&flat_tv)
-                       .expect("Unable to convert bytes to Page!"),
-                flat_tv.as_slice()
-                       .try_into()
-                       .expect("Unable to convert bytes to Page"),
-                flat_tv.as_ref()
-                       .try_into()
-                       .expect("Unable to convert bytes to Page"),
-                (&flat_tv).try_into()
-                          .expect("Unable to convert bytes to Page")
-            ];
-
-            for page in pages.iter() {
-                assert!(*page == &page_tv);
-            }
-        }
-
-        #[test]
-        fn two_pages() {
-            use super::{
-                S, F, P,
-                super::Page
-            };
-            let flat_tv  = vec![
-            // Page One
-            //  b00   b01   b02   b03   b04   b05   b06   b07 
-                0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,  // seed
-                0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,  // file
-                0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7,  // page
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // mutations
-                0x84, 0x08, 0x08, 0x03, 0xC4, 0x3E, 0xDF, 0xAF,  //  data
-            // Page Two
-            //  b00   b01   b02   b03   b04   b05   b06   b07 
-                0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,  // seed
-                0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,  // file
-                0xB1, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7,  // page
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // mutations
-                0xAB, 0x96, 0xF0, 0x6E, 0x6C, 0x81, 0x27, 0xD1,  //  data
-            ];
-
-            const W: usize = 1;
-            const PAGES: usize = 2;
-            let pages_tv: [Page<W>; PAGES] = [
-                Page::new(S, F, P),
-                Page::new(S, F, P+1)
-            ];
-
-            // Vec<u8> --> Vec<Page<W>>
-            let pages: Vec<Page<W>> = bytemuck::try_from_bytes::<[Page<W>; PAGES]>(&flat_tv)
-                                                        .expect("Could not convert bytes to Page!")
-                                                        .to_vec();
-            assert!(*pages == pages_tv);
-
-
-            // Vec<u8> --> &[Page<W>]
-            let pages: &[Page<W>] = bytemuck::try_from_bytes::<[Page<W>; PAGES]>(&flat_tv)
-                                                        .expect("Could not convert bytes to Page!");
-            assert!(*pages == pages_tv);
-            
-
-            // Vec<u8> --> &[Page<W>; PAGES]
-            let pages: &[Page<W>; PAGES] = bytemuck::try_from_bytes::<[Page<W>; PAGES]>(&flat_tv)
-                                                        .expect("Could not convert bytes to Page!");
-            assert!(*pages == pages_tv);
-
-
-            // &[u8] --> &[Page<W>; PAGES]
-            let flat_tv: &[u8] = flat_tv.as_slice();
-            let pages: &[Page<W>;PAGES] = bytemuck::try_from_bytes(flat_tv)
-                                                .expect("Could not convert bytes to Page!");
-            assert!(*pages == pages_tv);
-        }
-    }
-
-
-    mod to_and_from {
-        const W: usize = (512 / 8) - 4;
-        const PAGE_COUNT: usize = 64;
-
-        #[test]
-        fn random_page_bytes_vec() {
-            use super::super::Page;
-            use rand::prelude::*;
-
-
-            let mut rng: ThreadRng = rand::thread_rng();
-
-            let seed: u64 = rng.gen();
-            let file: u64 = rng.gen();
-
-            let pages: Vec<Page<W>> = (0..PAGE_COUNT).map(|i|{
-                    Page::new(seed, file, i as u64)
-                }).collect();
-            
-            
-            for (p, page) in pages.iter().enumerate() {
-                assert!(page.validate_page_with(seed, file, p as u64, 0)); 
-            }
-        }
-        #[test]
-        fn vec_writes_and_reads() {
-            use super::super::Page;
-            use rand::prelude::*;
-            use std::{
-                fs::File,
-                io::Write,
-            };
-
-            let tmpfile_name: String = String::from("test.page.serde");
-            let mut tmpfile: File = File::create(tmpfile_name.clone()).expect("Was not able to create temporary file!");
-
-            let mut rng: ThreadRng = rand::thread_rng();
-
-            let seed: u64 = rng.gen();
-            let file: u64 = rng.gen();
-
-            let pages: Vec<Page<W>> = (0..PAGE_COUNT).map(|i|{
-                    Page::new(seed, file, i as u64)
-                }).collect();
-
-            let write_buffer: Vec<u8> = pages.into_iter()
-                                             .map(|p |{ <&Page<W> as TryInto<&[u8]>>::try_into(&p).expect("Unable to convert").to_vec() })
-                                             .flatten()
-                                             .collect();
-
-            // Transition from bits in address-space to bits in file-space
-            tmpfile.write_all(write_buffer.as_slice()).unwrap();
-            tmpfile.flush().expect("Could not flush temporary file");
-            drop(tmpfile); // Let OS/Rust reap this file descriptor.
         
-            let read_buffer: Vec<u8> =  std::fs::read(tmpfile_name.clone()).expect("Could not read file");
-            if read_buffer.len() != Page::<W>::PAGE_BYTES * PAGE_COUNT {
-                std::fs::remove_file(tmpfile_name.clone()).expect("Unable to remove temporary testing file");
-                assert!(read_buffer.len() == Page::<W>::PAGE_BYTES * PAGE_COUNT, "Read {} of {} bytes", read_buffer.len(), Page::<W>::PAGE_BYTES * PAGE_COUNT);
-            }
+        page.update_file(0);
+        let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead+1, 0, 1, 0));
+        assert!(page.data == bytes, "mutate file failed");
 
-            let pages_w: &[Page<W>; PAGE_COUNT] = bytemuck::try_from_bytes::<[Page<W>; PAGE_COUNT]>(&read_buffer.as_slice())
-                                                        .expect("Could not convert bytes to Page");
 
-            for (p, page) in pages_w.iter().enumerate() {
-                if !page.validate_page_with(seed, file, p as u64, 0) {
-                    std::fs::remove_file(tmpfile_name.clone()).expect("Unable to remove temporary testing file");
-                    assert!(false, "Failed to valid page {} of {}", p, PAGE_COUNT);
-                }
-            }
-            std::fs::remove_file(tmpfile_name.clone()).expect("Unable to remove temporary testing file");
+        page.update_page(0);
+        let bytes: [u64; 1] = Page::generate_data(Page::<1>::assemble_seed(0xdead+1, 0, 0, 0));
+        assert!(page.data == bytes, "mutate page failed");
+
+
+        assert!(Page::<0>::PAGE_BYTES == std::mem::size_of::<Page<0>>(), "{} != {}",Page::<0>::PAGE_BYTES, std::mem::size_of::<Page<0>>()) ;
+        assert!(Page::<4096>::PAGE_BYTES == std::mem::size_of::<Page<4096>>(), "{} != {}",Page::<4096>::PAGE_BYTES, std::mem::size_of::<Page<4096>>()) ;
+    }
+
+    #[test]
+    fn random_page_bytes_vec() {
+        const W: usize = (512 / 8) - 4; // 512 words / 8 bytes per word - 4 metadata words
+        const PAGE_COUNT: usize = 64;
+        use super::Page;
+        use rand::prelude::*;
+
+
+        let mut rng: ThreadRng = rand::thread_rng();
+
+        let pages: Vec<Page<W>> = (0..PAGE_COUNT).map(|i|{
+                Page::new(rng.gen(), rng.gen(), i as u64)
+            }).collect();
+        
+        
+        for (_, page) in pages.iter().enumerate() {
+            assert!(page.is_valid());
         }
     }
 }

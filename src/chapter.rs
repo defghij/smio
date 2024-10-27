@@ -134,4 +134,6 @@ fn modify_pages_and_validate_bytes() {
            .for_each(|(i,page):(usize, &mut Page<W>)| { page.reinit(SEED, FID, PID + (i as u64), MUTS); });
 
     assert!(flat_tv == chapter.bytes_all());
+
+    assert!(0 == chapter.pages_all().iter().fold(0, |acc, page| acc + {if page.is_valid() {0} else {1} }));
 }
