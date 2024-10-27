@@ -32,8 +32,8 @@ use rayon::{
     }, 
     ThreadPool
 };
-use SuperMassiveIO::{
-    bookcase::BookCase,
+use super_massive_io::{
+    bookcase::{BookCasePlans, BookCase},
     chapter::Chapter,
     page::Page,
     queue::{
@@ -222,25 +222,21 @@ fn cli_arguments() -> Command {
 ///         - Cannot Create BookCase
 ///         - Config File isn't valid
 ///         - Config File doesn't point valid file structures.
-fn setup_bookcase(matches: ArgMatches) -> BookCase {
+fn setup_bookcase(matches: ArgMatches) -> Result<BookCase> {
     if let Some(c) = matches.get_one::<String>("verbosity") {
         println!("[Info] Verbosity Level: {c}");
     }
 
-    let mut bookcase: BookCase;
+    let bookcase: BookCase;
     if let Some(config_file) = matches.get_one::<PathBuf>("config") {
-        bookcase = BookCase::from_string(config_file.to_str().unwrap());
-        if !bookcase.is_assembled() {
-            println!("Configuration expected directory/file structure which cannot be found. Creating new one.");
-            bookcase.construct().unwrap();
-        }
+        let cfile: &str = config_file.to_str().unwrap();
+
+        bookcase = BookCasePlans::from_configuration_file(cfile)?.construct()?;
     } 
     else {
         if matches.value_source("path-prefix")
-                  .is_some_and(|source| source != ValueSource::CommandLine)
-        {
+                  .is_some_and(|source| source != ValueSource::CommandLine) {
             println!("[Warn] Using default value for prefix path");
-
         }
         
 
@@ -251,25 +247,21 @@ fn setup_bookcase(matches: ArgMatches) -> BookCase {
         let dcount: u64      = *matches.get_one("directory-count").unwrap();
         let fcount: u64      = *matches.get_one("book-count").unwrap();
         let pcount: u64      = *matches.get_one("page-count").unwrap();
-        let seed: u64        = *matches.get_one("seed").unwrap();
         //let direct_io: bool = *matches.get_one("o_direct").unwrap();
 
+        let bookcase_plan: BookCasePlans = BookCasePlans::new(pprefix.to_owned(),
+                                                              dprefix.to_owned(),
+                                                              dcount,
+                                                              fprefix.to_owned(),
+                                                              fcount, PAGE_BYTES * pcount as usize).expect("check path arguments");
 
-        bookcase = BookCase::new(pprefix.to_owned(), 
-                                 dprefix.to_owned(),
-                                 dcount,
-                                 fprefix.to_owned(),
-                                 fcount,
-                                 PAGE_BYTES,
-                                 pcount,
-                                 seed);
         //if direct_io { bookcase.use_direct_io() };
 
-        bookcase.write_configuration_file();
-        bookcase.construct().unwrap();
+        bookcase_plan.to_configuration_file()?;
+        bookcase = bookcase_plan.construct()?;
     }
     
-    bookcase
+    Ok(bookcase)
 }
 
 fn setup_threads() -> (ThreadPool, usize) {
@@ -306,11 +298,13 @@ fn main() -> Result<()> {
     if *args.get_one("verify").unwrap()    { modes.push(Mode::Verify); }
     if *args.get_one("tear-down").unwrap() { modes.push(Mode::Teardown); }
 
-    let mut bookcase: BookCase = setup_bookcase(args);
+    let pcount: u64 = *args.get_one("page-count").expect("[Error] Developer Error: no page count");
+    let seed: u64 = *args.get_one("seed").expect("[Error] Seed must be provided as a integer");
+
+    let bookcase: BookCase = setup_bookcase(args).expect("[Error] Could not setup file structure!");
 
     // This should check if bookcase even needs creating
     let fcount = bookcase.book_count();
-    let pcount = bookcase.page_count();
 
     const P: usize = PAGES_PER_CHAPTER;
     const W: usize = PAGE_BYTES / 8 - 4;
@@ -331,7 +325,8 @@ fn main() -> Result<()> {
                    pool.install(|| {
                        (0..cpus).into_par_iter()
                                 .for_each(|_|{
-                                    thread_worker::<P,W,B,SerialAccess>(mode, 
+                                    thread_worker::<P,W,B,SerialAccess>(seed, 
+                                                                        mode, 
                                                                         queue.clone(), 
                                                                         chapter.clone(), 
                                                                         bookcase.clone(),
@@ -344,7 +339,7 @@ fn main() -> Result<()> {
                    println!("Summary: {}", metrics.get_report_global());
                },
                Mode::Verify   => single_threaded_verify(&bookcase),
-               Mode::Teardown => bookcase.demolish().expect("Could not teardown files setup by application"),
+               Mode::Teardown => { let _ = bookcase.deconstruct().expect("Could not teardown files setup by application"); },
             }
 
             let mode_time: u128 = mode_start.elapsed().unwrap().as_nanos();
@@ -355,16 +350,16 @@ fn main() -> Result<()> {
 
 
 fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
-   mode: &Mode,
-   queue: Queue<T>,
-   mut chapter: Box<Chapter<P,W,B>>,
-   bookcase: BookCase,
-   metrics: Arc<Inspector>
+     seed: u64, 
+     mode: &Mode,
+     queue: Queue<T>,
+     mut chapter: Box<Chapter<P,W,B>>,
+     bookcase: BookCase,
+     metrics: Arc<Inspector>
 ) {
     let thread_id: usize = rayon::current_thread_index().unwrap_or(0);
-    let seed: u64 = bookcase.seed;
     let fcount = bookcase.book_count();
-    let pcount = bookcase.page_count();
+    let pcount: u64 = (bookcase.book_size() / PAGE_BYTES) as u64;
     let is_read: bool = match mode {
         Mode::Bench => true,
         _ => false

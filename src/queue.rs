@@ -1,7 +1,6 @@
 use std::sync::{atomic::AtomicU64, Arc};
 
 
-
 #[derive(Clone)]
 pub struct SimpleQueue { 
     current: Arc<AtomicU64>,
@@ -48,6 +47,8 @@ pub trait WorkQueue: Sync + Send {
     fn chunk_size(&self) -> u64;
 }
 
+// TODO This should really have a `next` function that takes a closure
+// and yields the next element element (u64)
 pub trait AccessPattern: Sync + Send {
 
     fn lower_bound(&self) -> u64;
