@@ -187,7 +187,7 @@ fn cli_arguments() -> Command {
         .arg(
             Arg::new("path-prefix")
                 .long("path-prefix")
-                .default_value("/tmp/smio")
+                .default_value("./")
                 .value_parser(value_parser!(PathBuf))
                 .value_name("path")
                 .value_hint(ValueHint::FilePath)

@@ -363,4 +363,10 @@ mod testing {
             });
         });
     }
+    
+    #[test]
+    #[serial]
+    fn configuration_file() {
+        unimplemented!("TODO: implement tests for the configuration file feature");
+    }
 }
