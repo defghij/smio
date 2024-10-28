@@ -20,6 +20,7 @@ use clap::{
     ValueHint
 };
 use anyhow::Result;
+use log::{info,debug,warn};
 
 //use perfcnt::{AbstractPerfCounter, PerfCounter};
 //use perfcnt::linux::{PerfCounterBuilderLinux, HardwareEventType};
@@ -66,16 +67,6 @@ fn cli_arguments() -> Command {
                 .action(ArgAction::SetTrue)
                 .help("Enables the benchmarking mode. Requires '--configuration-file' if not used with 'create' flag")
         )
-        .arg(
-            Arg::new("verbosity")
-                .short('v')
-                .long("verbosity")
-                .value_parser(["none", "info", "debug", "warning"])
-                .default_value("none")
-                .default_missing_value("info")
-                .groups(["creation", "benchmarking"])
-                .help("Verbosity level of the application")
-         )
         .arg(
             Arg::new("seed")
                 .short('s')
@@ -223,9 +214,6 @@ fn cli_arguments() -> Command {
 ///         - Config File isn't valid
 ///         - Config File doesn't point valid file structures.
 fn setup_bookcase(matches: ArgMatches) -> Result<BookCase> {
-    if let Some(c) = matches.get_one::<String>("verbosity") {
-        println!("[Info] Verbosity Level: {c}");
-    }
 
     let bookcase: BookCase;
     if let Some(config_file) = matches.get_one::<PathBuf>("config") {
@@ -236,7 +224,7 @@ fn setup_bookcase(matches: ArgMatches) -> Result<BookCase> {
     else {
         if matches.value_source("path-prefix")
                   .is_some_and(|source| source != ValueSource::CommandLine) {
-            println!("[Warn] Using default value for prefix path");
+            warn!("Using default value for prefix path");
         }
         
 
@@ -291,6 +279,23 @@ pub enum Mode {
 }
 
 fn main() -> Result<()> {
+
+    // Set up logging
+    fern::Dispatch::new()
+        .format(|out,message,record| {
+            out.finish(format_args!(
+                    "[{}][{}][{}]{}",
+                    humantime::format_rfc3339_seconds(std::time::SystemTime::now()),
+                    record.level(),
+                    record.target(),
+                    message
+            ))
+                    
+        })
+    .level(log::LevelFilter::Info)
+    .chain(std::io::stdout())
+    .apply()?;
+
     let args: ArgMatches = cli_arguments().get_matches();
     let mut modes: Vec<Mode> = Vec::new();
     if *args.get_one("create").unwrap()    { modes.push(Mode::Create); }
@@ -336,14 +341,14 @@ fn main() -> Result<()> {
                    });
                    let _ = metrics.flush();
                    
-                   println!("Summary: {}", metrics.get_report_global());
+                   info!(target: "performance", "[{}] Total written: {}", mode.to_str(), metrics.get_report_global());
                },
                Mode::Verify   => single_threaded_verify(&bookcase),
                Mode::Teardown => { let _ = bookcase.deconstruct().expect("Could not teardown files setup by application"); },
             }
 
             let mode_time: u128 = mode_start.elapsed().unwrap().as_nanos();
-            println!("[tid:{}][{}] {}ns total", rayon::current_thread_index().unwrap_or(0), mode.to_str(), mode_time);
+            info!(target: "performance", "[{}] Total time: {}ns", mode.to_str(), mode_time);
         });
     Ok(())
 }
@@ -397,8 +402,8 @@ fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
                 if is_read {
                     if !chapter.mutable_page(p % queue.chunk_size()).is_valid() {
                         let (s, f, p, m) = chapter.mutable_page(p % queue.chunk_size()).get_metadata();
-                        println!("Invalid Page Found: book {book_id}, page {page_id}");
-                        println!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
+                        warn!("Invalid Page Found: book {book_id}, page {page_id}");
+                        warn!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
                     } 
                 } else {
                     chapter.mutable_page(p % queue.chunk_size())
@@ -413,8 +418,7 @@ fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
 
             let bytes_completed: u64 = chapter.byte_count() as u64;
             if metrics.update(bytes_completed).is_err() {
-                println!("[tid:{}][{}] Warning: Unable to update bytes completed for thread", thread_id,
-                                                                                              mode.to_str());
+                warn!(target: "performance", "[{}][tid:{}] Unable to update bytes completed for thread", mode.to_str(), thread_id);
 
             }
         }
@@ -424,14 +428,15 @@ fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
                 // TODO: This reporting should be integrated into Inspector
                 let total_work = metrics.get_global_total();
                 let total_time = mode_start.elapsed().unwrap();
-                println!("[tid:{}][{}] {}, {}, {}/s, {:.2} ns/byte", thread_id, 
+                info!(target: "performance", "[{}][tid:{}] {}, {}, {}/s, {:.2} ns/byte", 
                                             mode.to_str(),
+                                            thread_id,
                                             HumanBytes(total_work),
                                             HumanDuration(total_time),
                                             HumanBytes((total_work as f64 / total_time.as_secs() as f64) as u64),
                                             total_time.as_nanos() as f64 / total_work as f64);
             } else {
-                println!("[tid:{}][{}] Warning: Unable sync metrics between threads", thread_id, mode.to_str()) 
+                warn!(target: "performance", "[{}][tid:{}] Unable sync metrics between threads", mode.to_str(), thread_id) 
             }
             sample_timer = SystemTime::now();
         }

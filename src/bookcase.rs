@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use anyhow::{anyhow, Result};
 
 use super::PAGE_BYTES;
+use log::trace;
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +62,8 @@ pub struct BookCasePlans {
     }
 
     pub fn from_configuration_file(config_file_path: &str) -> Result<BookCasePlans> {
+        trace!("Getting configuration from file {config_file_path}");
+
         use std::fs::read_to_string;
         let bookcase: BookCase = serde_json::from_str(&read_to_string(config_file_path)?)?;
         Ok(BookCasePlans {bookcase})
@@ -68,6 +71,9 @@ pub struct BookCasePlans {
 
     pub fn to_configuration_file(&self) -> Result<()> {
         use std::fs::write;
+        trace!("Writing configuration to file $prefix_path/config.json");
+
+        
         let serialized = serde_json::to_string_pretty(self)?;
         let path = format!("{}/config.json", self.bookcase.path_prefix.to_str().unwrap()); 
         Ok(write(path, serialized)?)
@@ -95,6 +101,8 @@ pub struct BookCasePlans {
     /// This simply returned a previously constructed `BookCase` if one was
     /// previously created using this structure.
     pub fn construct(self) -> Result<BookCase> {
+        trace!("Creating BookCase file structure");
+
         if !self.bookcase.is_assembled() {
             for fid in 0..(self.bookcase.file.count as usize) {
                 self.create_book(fid as u64)?;
