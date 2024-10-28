@@ -1,7 +1,6 @@
 use std::{ 
     fs::File, io::{ 
         Read, 
-        Result, 
         Seek, 
         SeekFrom, 
         Write 
@@ -20,6 +19,7 @@ use clap::{
     Command,
     ValueHint
 };
+use anyhow::Result;
 
 //use perfcnt::{AbstractPerfCounter, PerfCounter};
 //use perfcnt::linux::{PerfCounterBuilderLinux, HardwareEventType};

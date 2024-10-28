@@ -5,13 +5,11 @@ use std::{
     }, path::{Path, PathBuf},
     os::unix::fs::OpenOptionsExt
 };
-use std::io::Result;
 use std::fmt;
 use serde::{Deserialize, Serialize};
+use anyhow::{anyhow, Result};
 
-// I dont know why this complains about unused import
-#[allow(unused_imports)]
-use serial_test::serial;
+use super::PAGE_BYTES;
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,11 +29,6 @@ pub struct BookCasePlans {
 
     /// Creates a new bookcase constructor type BookCasePlans
     /// from function arguments.
-    ///
-    /// ***Panic***: This function panics in the event that the `prefix_path`
-    /// does not exist. This is an unrecoverable error as the prefix path is 
-    /// how all files are located. If this is invalid then we cannot create
-    /// a valid file structure.
     pub fn new(path_prefix: PathBuf,
                directory_prefix: String,
                directory_count: u64,
@@ -45,7 +38,13 @@ pub struct BookCasePlans {
                ) -> Result<BookCasePlans> {
 
         if !path_prefix.exists() {
-            panic!("check path prefix; does not exist");
+            return Err(anyhow!("check path prefix; does not exist: {}", path_prefix.display()));
+        }
+        if directory_count == 0 || (file_count / directory_count) < 1 {
+            return Err(anyhow!("attempted to create more directories ({directory_count}) than files ({file_count})"));
+        }
+        if file_size < PAGE_BYTES || file_size.rem_euclid(PAGE_BYTES) != 0 {
+            return Err(anyhow!("invalid file size; file size must be non-zero multiple of {PAGE_BYTES}"));
         }
 
         Ok(
@@ -135,7 +134,7 @@ pub struct BookCase {
 
     pub fn open_book(&self, id: u64, read: bool, write: bool) -> Result<File> {
         let fpath: String = self.book_location(id).to_str().unwrap().to_string();
-        OpenOptions::new().read(read)
+        let file: File = OpenOptions::new().read(read)
                           .write(write)
                           .create(
                                if read && !write { false }
@@ -145,7 +144,8 @@ pub struct BookCase {
                               if self.direct_io { libc::O_DIRECT }
                               else              { 0 }
                           )
-                          .open(&fpath)
+                          .open(&fpath)?;
+        Ok(file)
     }
 
     ////////////////////////////////////////////////////
@@ -272,5 +272,95 @@ pub struct BookCase {
 
 // TODO: Should test creation and destruction
 mod testing {
+    #[allow(unused_imports)]
+    use serial_test::serial;
 
+    /// Basic test for the creation and deletion of the BookCase file structure.
+    /// This test uses a temporary dir that is deleted once the function scope
+    /// is exited.
+    #[test]
+    #[serial]
+    fn creation_and_destruction() {
+        use tempfile::{tempdir, TempDir};
+        use super::{BookCasePlans,BookCase};
+        use super::super::PAGE_BYTES;
+        
+        let temp_dir: TempDir = tempdir().expect("Could not create temp directory for unit test");
+        
+        // FAILING TESTS
+        //////////////////////////////////////////////////////////
+        let test_vectors_pass: Vec<(u64, u64, usize)> = vec![
+            (1,0,PAGE_BYTES * 1),
+            (0,1,PAGE_BYTES * 1),
+            (2,1,PAGE_BYTES * 1),
+            (1,1,PAGE_BYTES * 0),
+        ];
+        test_vectors_pass.iter().for_each(|(dir_count, file_count, file_size)|{
+            let fcount: u64 = *file_count;
+            let fsize: usize = *file_size;
+            let dcount: u64 = *dir_count;
+
+            assert!(BookCasePlans::new(temp_dir.path().to_path_buf(),
+                                       String::from("shelf"),
+                                       dcount,
+                                       String::from("book"),
+                                       fcount,
+                                       fsize).is_err());
+        });
+
+
+        // PASSING TESTS
+        //////////////////////////////////////////////////////////
+        let test_vectors_pass: Vec<(u64, u64, usize)> = vec![
+            (1,1,PAGE_BYTES * 1),
+            (1,10,PAGE_BYTES * 1),
+            (1,100,PAGE_BYTES * 100),
+            (100,100,PAGE_BYTES * 1024),
+        ];
+
+        test_vectors_pass.iter().for_each(|(dir_count, file_count, file_size)|{
+            let fcount: u64 = *file_count;
+            let fsize: usize = *file_size;
+            let dcount: u64 = *dir_count;
+
+            let bookcase_plan: BookCasePlans = BookCasePlans::new(temp_dir.path().to_path_buf(),
+                                                                  String::from("shelf"),
+                                                                  dcount,
+                                                                  String::from("book"),
+                                                                  fcount,
+                                                                  fsize).expect("Could not create BookCasePlans");
+            let bookcase: BookCase = bookcase_plan.construct().expect("Could not construct BookCase");
+
+            assert!(bookcase.is_assembled());
+
+            // Test the number and characteristics of created files.
+            assert!(fcount == bookcase.book_count());
+            (0..fcount).for_each(|fid| {
+                let metadata = std::fs::metadata(bookcase.book_location(fid as u64)).expect("Unable to read BookCase file metadata");
+                assert!(metadata.is_file());
+                assert!(fsize == metadata.len() as usize);
+                assert!(metadata.len() == bookcase.book_size() as u64);
+            });
+            
+            // Test the number and characteristics of created directories.
+            assert!(dcount == bookcase.shelf_count());
+            (0..dcount).for_each(|did| {
+                let metadata = std::fs::metadata(bookcase.shelf_location(did)).expect("Unable to read BookCase file metadata");
+                assert!(metadata.is_dir());
+            });
+
+            // Tear down
+            bookcase.deconstruct().expect("Unable to remove BookCase file structure");
+
+            assert!(!bookcase.is_assembled());
+
+            // Assert all artifacts removed
+            (0..fcount).for_each(|fid| {
+                assert!(std::fs::metadata(bookcase.book_location(fid)).is_err());
+            });
+            (0..dcount).for_each(|did| {
+                assert!(std::fs::metadata(bookcase.shelf_location(did)).is_err());
+            });
+        });
+    }
 }
