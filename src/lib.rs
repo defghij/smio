@@ -127,7 +127,7 @@ impl Inspector {
 
     #[inline(always)]
     fn wait_for_unlock(&self) {
-        while self.locked.load(Ordering::SeqCst) {}
+        while self.locked.load(Ordering::SeqCst) { std::hint::spin_loop() }
     }
     
     fn blocking<F>(&self, operation: F) -> Result<(), ()> 

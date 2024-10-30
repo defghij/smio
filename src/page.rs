@@ -122,8 +122,6 @@ pub struct Page<const W: usize> {
         }
     }
 
-    // TODO: Include mutations in all of the relevant functions below
-
     ////////////////////////////////////////////////////
     //// Data Functions
 
@@ -151,7 +149,9 @@ pub struct Page<const W: usize> {
         data
     }
 
-    /// Will return true if supplied arguments result in data that is consistent 
+    /// Validates the data correctness of Self by working through an entirely
+    /// new page creation using the supplied meta-data and then comparing the result with
+    /// Self. Will return true if supplied arguments result in data that is consistent 
     /// with self.data. This function will generate data from supplied arguments
     /// and compare to state of self.
     pub fn validate_page_with(self, seed: u64, file: u64, page: u64, mutations: u64) -> bool {
@@ -159,25 +159,26 @@ pub struct Page<const W: usize> {
         data == self.data
     }
 
-    /// This does uses the instatiated types meta-data to verify the 
-    /// data words. Because the all elements of the meta-data are used
-    /// in data word creation (hash), any corruption in either will
-    /// lead to a negative (false) result.
+    /// This uses Self's meta-data to verify data correctness. Because the all 
+    /// elements of the meta-data are used in data word creation (hash), any corruption
+    /// in either will lead to a negative (false) result.
     pub fn is_valid(&self) -> bool {
         self.validate_page_with(self.seed, self.file, self. page, self.mutations)
     }
      
+    /// Returns the types meta-data as a tuple.
     pub fn get_metadata(&self) -> (u64, u64, u64, u64) {
         (self.seed,
          self.file,
          self.page,
          self.mutations)
-
     }
 
     ////////////////////////////////////////////////////
     //// Mutatate/Transmute Functions
     /// All mutate functions cause the re-generation of the data contained in a page.
+    /// This is the same as creating a new page with the supplied meta-data except
+    /// memory of the previous page is reused.
 
     /// Reinitialize the page. This function alters all parts of the Page metadata.
     /// This is the same as creating a new page except `mutations` must be provided.

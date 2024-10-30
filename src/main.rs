@@ -292,7 +292,7 @@ fn main() -> Result<()> {
             ))
                     
         })
-    .level(log::LevelFilter::Info)
+    .level(log::LevelFilter::Trace)
     .chain(std::io::stdout())
     .apply()?;
 
@@ -314,7 +314,7 @@ fn main() -> Result<()> {
     const P: usize = PAGES_PER_CHAPTER;
     const W: usize = PAGE_BYTES / 8 - 4;
     const B: usize = Page::<W>::PAGE_BYTES * P;
-    let serial: SerialAccess = SerialAccess::new(0, fcount * pcount, 1, PAGES_PER_CHAPTER as u64);
+    let serial: SerialAccess = SerialAccess::new(0, fcount * pcount - 1, 1, PAGES_PER_CHAPTER as u64);
 
     let (pool, cpus): (ThreadPool, usize) = setup_threads();
 
@@ -327,6 +327,7 @@ fn main() -> Result<()> {
                    let queue: Queue<SerialAccess> = Queue::new(pcount, serial.clone());
                    let chapter = Box::new(Chapter::<P,W,B>::new());
                    let metrics: Arc<Inspector> = Arc::new(Inspector::new(cpus));
+
                    pool.install(|| {
                        (0..cpus).into_par_iter()
                                 .for_each(|_|{
@@ -353,7 +354,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-
+//TODO There should be some distinct function for each Read and Write mode
 fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
      seed: u64, 
      mode: &Mode,
@@ -363,12 +364,10 @@ fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
      metrics: Arc<Inspector>
 ) {
     let thread_id: usize = rayon::current_thread_index().unwrap_or(0);
-    let fcount = bookcase.book_count();
-    let pcount: u64 = (bookcase.book_size() / PAGE_BYTES) as u64;
-    let is_read: bool = match mode {
-        Mode::Bench => true,
-        _ => false
-    };
+    let is_read: bool = matches!(mode, Mode::Bench);
+
+    //TODO: Flesh out this verify thing more
+    let verify: bool = true;
 
     metrics.register_thread();
 
@@ -377,12 +376,11 @@ fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
 
     while let Some((page_id, book_id)) = queue.take_work() {
 
-        if page_id * book_id >= queue.capacity() { break; }
-        if book_id >= fcount                     { break; }
-        if page_id >= pcount                     { break; }
         let mut book_file: File = bookcase.open_book(book_id, is_read, !is_read)
                                           .expect("Could  not open  file!");
 
+        // If this isnt the start of a file, seek to the appropriate place to begin reading
+        // data.
         if page_id != 0 {
             book_file.seek(SeekFrom::Start(page_id * PAGE_BYTES as u64))
                      .expect(&format!("Unable to seek to write location in book {book_id}"));
@@ -394,33 +392,34 @@ fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
             if bytes_read == 0 || bytes_read % PAGE_BYTES != 0 { break; } // This should emit a debug
         }  
         
-        let start: u64 = page_id;
-        let end: u64   = start + queue.chunk_size() ;
 
-        if end <= pcount {
-            (start..end).for_each(|p|{
-                if is_read {
-                    if !chapter.mutable_page(p % queue.chunk_size()).is_valid() {
-                        let (s, f, p, m) = chapter.mutable_page(p % queue.chunk_size()).get_metadata();
-                        warn!("Invalid Page Found: book {book_id}, page {page_id}");
-                        warn!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
-                    } 
-                } else {
-                    chapter.mutable_page(p % queue.chunk_size())
-                           .reinit(seed, book_id, p, 0);
+        // Iterate over the range {page_id, page_id + work_chunk}
+        (page_id..(page_id+queue.chunk_size())).for_each(|p|{
+            let chapter_relative_page_id = p % queue.chunk_size();
+            if is_read {
+                if !chapter.mutable_page(chapter_relative_page_id).is_valid() {
+                    let (s, f, p, m) = chapter.mutable_page(chapter_relative_page_id).get_metadata();
+                    warn!("Invalid Page Found: book {book_id}, page {page_id}");
+                    warn!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
+                } 
+            } else {
+                chapter.mutable_page(chapter_relative_page_id)
+                       .reinit(seed, book_id, p, 0);
+                if verify && !chapter.page(chapter_relative_page_id).is_valid() {
+                    warn!("Validation error after write. Page {p} of file {book_id} failed its validation check!"); 
                 }
-            });
-
-            if !is_read {
-                book_file.write_all(chapter.bytes_all()).unwrap();
-                book_file.flush().expect("Could not flush file");
             }
+        });
 
-            let bytes_completed: u64 = chapter.byte_count() as u64;
-            if metrics.update(bytes_completed).is_err() {
-                warn!(target: "performance", "[{}][tid:{}] Unable to update bytes completed for thread", mode.to_str(), thread_id);
+        if !is_read {
+            book_file.write_all(chapter.bytes_all()).unwrap();
+            book_file.flush().expect("Could not flush file");
+        }
 
-            }
+        let bytes_completed: u64 = chapter.byte_count() as u64;
+        if metrics.update(bytes_completed).is_err() {
+            warn!(target: "performance", "[{}][tid:{}] Unable to update bytes completed for thread", mode.to_str(), thread_id);
+
         }
 
         if thread_id == 0 && 999 <= sample_timer.elapsed().unwrap().as_millis() {
@@ -442,6 +441,7 @@ fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
         }
     }
 }
+
 
 
 // Keep this function around as a secondary check on 

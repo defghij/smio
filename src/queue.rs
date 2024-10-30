@@ -58,13 +58,13 @@ pub trait AccessPattern: Sync + Send {
     fn set_upper_bound(&self);
 
     fn stride(&self) -> u64;
-    fn set_stride(&self);
+    fn set_stride(&selfi stride: u64);
     
     fn access_size(&self) -> u64;
-    fn set_access_size(&self);
+    fn set_access_size(&self, size: u64);
 
     fn access_count(&self) -> u64;
-    fn set_access_count(&self);
+    fn set_access_count(&self, count: u64);
 }
 
 #[derive(Clone)]
@@ -76,10 +76,25 @@ pub struct AccessBounds {
     access_count: u64,
 }
 
+/// TODO: This should probaby be rolled into Queue.
 /// This defines a monotonically increasing access pattern over a set of values.
 #[derive(Clone)]
 pub struct SerialAccess(AccessBounds);
 impl SerialAccess {
+    /// Creates a new access pattern. 
+    /// Note that lower and upper bound assume zero-based indexing. `access_size` is the number
+    /// of items each access will pull. This is the size of the work chunk. Returns a 
+    /// `SerialAccess` which implements the `AccessPattern` trait for use with
+    /// `Queue<AccessPattern>`.
+    /// 
+    /// # Example
+    ///
+    /// ```
+    /// // Will create a 5 element access pattern that will denote work in the following way
+    /// // [0,1],[2.3],[4,5],[6,7],[8,9]
+    /// let serial: SerialAccess = SerialAccess::new(0, 9, 1, 2);
+    /// ```
+
     pub fn new(lower_bound: u64, upper_bound: u64, stride: u64, access_size: u64) -> SerialAccess {
         let access_count: u64 = (upper_bound - lower_bound) / stride;
         SerialAccess(
