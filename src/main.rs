@@ -37,12 +37,7 @@ use super_massive_io::{
     bookcase::{BookCasePlans, BookCase},
     chapter::Chapter,
     page::Page,
-    queue::{
-        AccessPattern, 
-        Queue, 
-        SerialAccess, 
-        WorkQueue
-    }, 
+    queue::Queue, 
     Inspector, 
     PAGES_PER_CHAPTER, 
     PAGE_BYTES
@@ -314,7 +309,6 @@ fn main() -> Result<()> {
     const P: usize = PAGES_PER_CHAPTER;
     const W: usize = PAGE_BYTES / 8 - 4;
     const B: usize = Page::<W>::PAGE_BYTES * P;
-    let serial: SerialAccess = SerialAccess::new(0, fcount * pcount - 1, 1, PAGES_PER_CHAPTER as u64);
 
     let (pool, cpus): (ThreadPool, usize) = setup_threads();
 
@@ -324,20 +318,23 @@ fn main() -> Result<()> {
             let mode_start: SystemTime = SystemTime::now();
             match mode {
                Mode::Create | Mode::Bench => {
-                   let queue: Queue<SerialAccess> = Queue::new(pcount, serial.clone());
+                   let stride: u64 = 1;
+                   let queue: Queue = Queue::new(0, fcount*pcount -1, move |current| {
+                       Some(current + stride)
+                   });
                    let chapter = Box::new(Chapter::<P,W,B>::new());
                    let metrics: Arc<Inspector> = Arc::new(Inspector::new(cpus));
 
                    pool.install(|| {
                        (0..cpus).into_par_iter()
                                 .for_each(|_|{
-                                    thread_worker::<P,W,B,SerialAccess>(seed, 
-                                                                        mode, 
-                                                                        queue.clone(), 
-                                                                        chapter.clone(), 
-                                                                        bookcase.clone(),
-                                                                        metrics.clone()
-                                                                        );
+                                    thread_worker::<P,W,B>(seed, 
+                                                           mode, 
+                                                           queue.clone(), 
+                                                           chapter.clone(), 
+                                                           bookcase.clone(),
+                                                           metrics.clone()
+                                     );
                                 });
                    });
                    let _ = metrics.flush();
@@ -355,16 +352,17 @@ fn main() -> Result<()> {
 }
 
 //TODO There should be some distinct function for each Read and Write mode
-fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
+fn thread_worker<const P:usize,const W: usize,const B: usize>(
      seed: u64, 
      mode: &Mode,
-     queue: Queue<T>,
+     queue: Queue,
      mut chapter: Box<Chapter<P,W,B>>,
      bookcase: BookCase,
      metrics: Arc<Inspector>
 ) {
     let thread_id: usize = rayon::current_thread_index().unwrap_or(0);
     let is_read: bool = matches!(mode, Mode::Bench);
+    let page_count_per_book: usize = bookcase.book_size() / PAGE_BYTES;
 
     //TODO: Flesh out this verify thing more
     let verify: bool = true;
@@ -374,7 +372,9 @@ fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
     let mode_start: SystemTime = SystemTime::now();
     let mut sample_timer: SystemTime = SystemTime::now();
 
-    while let Some((page_id, book_id)) = queue.take_work() {
+    while let Some(work) = queue.take_work() {
+        let page_id = work % page_count_per_book as u64;
+        let book_id = work / page_count_per_book as u64;
 
         let mut book_file: File = bookcase.open_book(book_id, is_read, !is_read)
                                           .expect("Could  not open  file!");
@@ -394,7 +394,8 @@ fn thread_worker<const P:usize,const W: usize,const B: usize,T: AccessPattern>(
         
 
         // Iterate over the range {page_id, page_id + work_chunk}
-        (page_id..(page_id+queue.chunk_size())).for_each(|p|{
+        (page_id..(page_id+queue.chunk_size())).for_each(|p|{ // FIXME: Incorporate chunksize into
+                                                              // queue some how?
             let chapter_relative_page_id = p % queue.chunk_size();
             if is_read {
                 if !chapter.mutable_page(chapter_relative_page_id).is_valid() {
