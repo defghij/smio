@@ -7,11 +7,19 @@ pub mod chapter;
 pub mod bookcase;
 pub mod queue;
 
+/// Size of a Page in Bytes
 pub const PAGE_BYTES: usize         = 4096 /*bytes*/;
+
+/// Size of a Page's Metadata fields in bytes
 pub const METADATA_BYTES: usize    = page::Page::<0>::METADATA_BYTES;
+
+/// Size of a Page's Data Payload in bytes
 pub const DATA_BYTES: usize        = PAGE_BYTES - METADATA_BYTES;
 pub const DATA_WORDS: usize        = DATA_BYTES / std::mem::size_of::<u64>();
+// Page contained in a Book (file).
 pub const PAGE_COUNT: usize        = 512;
+
+/// How many Pages are used in a single writable chunk
 pub const PAGES_PER_CHAPTER: usize = 256;
 
 pub type PageBytes = [u8; PAGE_BYTES];
