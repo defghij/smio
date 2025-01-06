@@ -1,3 +1,4 @@
+#[allow(unused)]
 use std::{ 
     fs::File, io::{ 
         Read, 
@@ -20,7 +21,8 @@ use clap::{
     ValueHint
 };
 use anyhow::Result;
-use log::{info,debug,warn};
+
+use log::{/*info,debug,*/warn};
 
 //use perfcnt::{AbstractPerfCounter, PerfCounter};
 //use perfcnt::linux::{PerfCounterBuilderLinux, HardwareEventType};
@@ -37,12 +39,13 @@ use super_massive_io::{
     bookcase::{BookCasePlans, BookCase},
     chapter::Chapter,
     page::Page,
-    queue::Queue, 
-    Inspector, 
+    //queue::Queue, 
+    //Inspector, 
     PAGES_PER_CHAPTER, 
     PAGE_BYTES
 };
  
+#[allow(unused)]
 fn cli_arguments() -> Command {
     Command::new("SuperMassiveIO")
         .about("Research application into File System IO")
@@ -198,6 +201,7 @@ fn cli_arguments() -> Command {
         )
 } 
 
+#[allow(unused)]
 /// This function handles all aspects of creating the application context
 /// type BookCase. This can be either from a configuration file or from
 /// commandline arguments.
@@ -247,6 +251,7 @@ fn setup_bookcase(matches: ArgMatches) -> Result<BookCase> {
     Ok(bookcase)
 }
 
+#[allow(unused)]
 fn setup_threads() -> (ThreadPool, usize) {
     // Set up thread pool
     let available_cpus: usize = std::thread::available_parallelism().unwrap().into();
@@ -262,7 +267,7 @@ pub enum Mode {
     Verify,
     Teardown,
 } impl Mode {
-    fn to_str(&self) -> &str {
+    fn _to_str(&self) -> &str {
         match self {
             Mode::Create => "Create",
             Mode::Bench => "Bench",
@@ -298,13 +303,13 @@ fn main() -> Result<()> {
     if *args.get_one("verify").unwrap()    { modes.push(Mode::Verify); }
     if *args.get_one("tear-down").unwrap() { modes.push(Mode::Teardown); }
 
-    let pcount: u64 = *args.get_one("page-count").expect("[Error] Developer Error: no page count");
+    let _pcount: u64 = *args.get_one("page-count").expect("[Error] Developer Error: no page count");
     let seed: u64 = *args.get_one("seed").expect("[Error] Seed must be provided as a integer");
 
     let bookcase: BookCase = setup_bookcase(args).expect("[Error] Could not setup file structure!");
 
     // This should check if bookcase even needs creating
-    let fcount = bookcase.book_count();
+    let _fcount = bookcase.book_count();
 
     const P: usize = PAGES_PER_CHAPTER;
     const W: usize = PAGE_BYTES / 8 - 4;
@@ -315,136 +320,104 @@ fn main() -> Result<()> {
 
     modes.iter()
         .for_each(|mode| { 
-            let mode_start: SystemTime = SystemTime::now();
             match mode {
                Mode::Create | Mode::Bench => {
+                   /*
                    let stride: u64 = 1;
                    let queue: Queue = Queue::new(0, fcount*pcount -1, move |current| {
                        Some(current + stride)
                    });
+                   */
                    let chapter = Box::new(Chapter::<P,W,B>::new());
-                   let metrics: Arc<Inspector> = Arc::new(Inspector::new(cpus));
 
                    pool.install(|| {
                        (0..cpus).into_par_iter()
                                 .for_each(|_|{
                                     thread_worker::<P,W,B>(seed, 
                                                            mode, 
-                                                           queue.clone(), 
+                                                           //queue.clone(), 
                                                            chapter.clone(), 
                                                            bookcase.clone(),
-                                                           metrics.clone()
                                      );
                                 });
                    });
-                   let _ = metrics.flush();
-                   
-                   info!(target: "performance", "[{}] Total written: {}", mode.to_str(), metrics.get_report_global());
                },
                Mode::Verify   => single_threaded_verify(&bookcase),
                Mode::Teardown => { let _ = bookcase.deconstruct().expect("Could not teardown files setup by application"); },
             }
-
-            let mode_time: u128 = mode_start.elapsed().unwrap().as_nanos();
-            info!(target: "performance", "[{}] Total time: {}ns", mode.to_str(), mode_time);
         });
     Ok(())
 }
 
 //TODO There should be some distinct function for each Read and Write mode
-fn thread_worker<const P:usize,const W: usize,const B: usize>(
-     seed: u64, 
-     mode: &Mode,
-     queue: Queue,
-     mut chapter: Box<Chapter<P,W,B>>,
-     bookcase: BookCase,
-     metrics: Arc<Inspector>
-) {
-    let thread_id: usize = rayon::current_thread_index().unwrap_or(0);
-    let is_read: bool = matches!(mode, Mode::Bench);
-    let page_count_per_book: usize = bookcase.book_size() / PAGE_BYTES;
-
-    //TODO: Flesh out this verify thing more
-    let verify: bool = true;
-
-    metrics.register_thread();
-
-    let mode_start: SystemTime = SystemTime::now();
-    let mut sample_timer: SystemTime = SystemTime::now();
-
-    while let Some(work) = queue.take_work() {
-        let page_id = work % page_count_per_book as u64;
-        let book_id = work / page_count_per_book as u64;
-
-        let mut book_file: File = bookcase.open_book(book_id, is_read, !is_read)
-                                          .expect("Could  not open  file!");
-
-        // If this isnt the start of a file, seek to the appropriate place to begin reading
-        // data.
-        if page_id != 0 {
-            book_file.seek(SeekFrom::Start(page_id * PAGE_BYTES as u64))
-                     .expect(&format!("Unable to seek to write location in book {book_id}"));
-        }
-
-        if is_read {
-            let buffer: &mut [u8] = chapter.mutable_bytes_all();
-            let bytes_read: usize = book_file.read(buffer).expect("Could not read from file!");
-            if bytes_read == 0 || bytes_read % PAGE_BYTES != 0 { break; } // This should emit a debug
-        }  
-        
-
-        // Iterate over the range {page_id, page_id + work_chunk}
-        (page_id..(page_id+queue.chunk_size())).for_each(|p|{ // FIXME: Incorporate chunksize into
-                                                              // queue some how?
-            let chapter_relative_page_id = p % queue.chunk_size();
-            if is_read {
-                if !chapter.mutable_page(chapter_relative_page_id).is_valid() {
-                    let (s, f, p, m) = chapter.mutable_page(chapter_relative_page_id).get_metadata();
-                    warn!("Invalid Page Found: book {book_id}, page {page_id}");
-                    warn!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
-                } 
-            } else {
-                chapter.mutable_page(chapter_relative_page_id)
-                       .reinit(seed, book_id, p, 0);
-                if verify && !chapter.page(chapter_relative_page_id).is_valid() {
-                    warn!("Validation error after write. Page {p} of file {book_id} failed its validation check!"); 
-                }
-            }
-        });
-
-        if !is_read {
-            book_file.write_all(chapter.bytes_all()).unwrap();
-            book_file.flush().expect("Could not flush file");
-        }
-
-        let bytes_completed: u64 = chapter.byte_count() as u64;
-        if metrics.update(bytes_completed).is_err() {
-            warn!(target: "performance", "[{}][tid:{}] Unable to update bytes completed for thread", mode.to_str(), thread_id);
-
-        }
-
-        if thread_id == 0 && 999 <= sample_timer.elapsed().unwrap().as_millis() {
-            if metrics.flush().is_ok() { 
-                // TODO: This reporting should be integrated into Inspector
-                let total_work = metrics.get_global_total();
-                let total_time = mode_start.elapsed().unwrap();
-                info!(target: "performance", "[{}][tid:{}] {}, {}, {}/s, {:.2} ns/byte", 
-                                            mode.to_str(),
-                                            thread_id,
-                                            HumanBytes(total_work),
-                                            HumanDuration(total_time),
-                                            HumanBytes((total_work as f64 / total_time.as_secs() as f64) as u64),
-                                            total_time.as_nanos() as f64 / total_work as f64);
-            } else {
-                warn!(target: "performance", "[{}][tid:{}] Unable sync metrics between threads", mode.to_str(), thread_id) 
-            }
-            sample_timer = SystemTime::now();
-        }
-    }
-}
+ fn thread_worker<const P:usize,const W: usize,const B: usize>(
+      _seed: u64, 
+      mode: &Mode,
+      //queue: Queue,
+      mut _chapter: Box<Chapter<P,W,B>>,
+      bookcase: BookCase,
+ ) {
+     let _thread_id: usize = rayon::current_thread_index().unwrap_or(0);
+     let _is_read: bool = matches!(mode, Mode::Bench);
+     let _page_count_per_book: usize = bookcase.book_size() / PAGE_BYTES;
+ 
+     //TODO: Flesh out this verify thing more
+     let _verify: bool = true;
+ 
+ 
+     /*
+     while let Some(work) = queue.take_work() {
+         let page_id = work % page_count_per_book as u64;
+         let book_id = work / page_count_per_book as u64;
+ 
+         let mut book_file: File = bookcase.open_book(book_id, is_read, !is_read)
+                                           .expect("Could  not open  file!");
+ 
+         // If this isnt the start of a file, seek to the appropriate place to begin reading
+         // data.
+         if page_id != 0 {
+             book_file.seek(SeekFrom::Start(page_id * PAGE_BYTES as u64))
+                      .expect(&format!("Unable to seek to write location in book {book_id}"));
+         }
+ 
+         if is_read {
+             let buffer: &mut [u8] = chapter.mutable_bytes_all();
+             let bytes_read: usize = book_file.read(buffer).expect("Could not read from file!");
+             if bytes_read == 0 || bytes_read % PAGE_BYTES != 0 { break; } // This should emit a debug
+         }  
+         
+ 
+         // Iterate over the range {page_id, page_id + work_chunk}
+         (page_id..(page_id+queue.chunk_size())).for_each(|p|{ // FIXME: Incorporate chunksize into
+                                                               // queue some how?
+             let chapter_relative_page_id = p % queue.chunk_size();
+             if is_read {
+                 if !chapter.mutable_page(chapter_relative_page_id).is_valid() {
+                     let (s, f, p, m) = chapter.mutable_page(chapter_relative_page_id).get_metadata();
+                     warn!("Invalid Page Found: book {book_id}, page {page_id}");
+                     warn!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
+                 } 
+             } else {
+                 chapter.mutable_page(chapter_relative_page_id)
+                        .reinit(seed, book_id, p, 0);
+                 if verify && !chapter.page(chapter_relative_page_id).is_valid() {
+                     warn!("Validation error after write. Page {p} of file {book_id} failed its validation check!"); 
+                 }
+             }
+         });
+ 
+         if !is_read {
+             book_file.write_all(chapter.bytes_all()).unwrap();
+             book_file.flush().expect("Could not flush file");
+         }
+ 
+         let bytes_completed: u64 = chapter.byte_count() as u64;
+     }
+     */
+ }
 
 
-
+#[allow(unused)]
 // Keep this function around as a secondary check on 
 // multi-threaded read and verify.
 // Eventually this should be replaced with a multi-threaded
