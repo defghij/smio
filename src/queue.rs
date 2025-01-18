@@ -1,8 +1,10 @@
-
 pub mod work {
-    use std::sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+    use std::{
+        ops::Range,
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Arc, Mutex,
+        }
     };
     use super::super::PAGE_COUNT;
     const COLUMNS: u64 = PAGE_COUNT as u64;
@@ -76,273 +78,648 @@ pub mod work {
         }
     }
 
+    #[derive(Clone)]
     pub struct Constraints {
-        lower_bound: u64,
-        upper_bound: u64,
+        range: Range<u64>,
 
         /// Maximum number of iterations this type will survive.
-        /// After `(iteration == iteration_max) == true`
+        /// Exclusive`
         iteration_max: u64,
 
-        /// User provided stepping function for the iterator. This
-        /// function will be called on every yield/iteration.
-        step: Arc<dyn Fn(u64, Option<u64>, u64) -> Option<u64> + Send+Sync+'static>,
     } impl Constraints {
-        pub fn new<F>(lower_bound: u64, upper_bound: u64, iteration_max: u64, step: F) -> Constraints
-            where F: Fn(u64, Option<u64>, u64) -> Option<u64> + Send+Sync+'static {
+        pub fn new<F>(range: Range<u64>, iteration_max: u64) -> Constraints {
             Constraints {
-                lower_bound,
-                upper_bound,
+                range,
                 iteration_max,
-                step: Arc::new(step)
             }
         }
 
         /// Returns whether the supplied unit is contained within the
         /// constraints provided by this type's instantiation.
-        pub fn contains(&self, other: Option<u64>) -> bool {
-            other.is_some_and(|unit| {
-                self.lower_bound <= unit && unit <= self.upper_bound
+        #[inline(always)]
+        fn contains(&self, s: &State) -> bool {
+            s.current.is_some_and(|unit| {
+                self.range.contains(&unit)
             })
+        }
+
+        #[inline(always)]
+        fn is_live(&self, s: &State) -> bool {
+             s.iteration < self.iteration_max
+        }
+
+        #[inline(always)]
+        pub fn are_respected(&self, s: &State) -> bool { 
+            self.contains(s) && self.is_live(s)
         }
     }
 
+    #[derive(Clone)]
     pub struct State {
+        /// The current value of the _DIter_. 
         current: Option<u64>,
+
+        /// The current iteration/step of `step`. 
         iteration: u64,
+
+        /// User provided stepping function for the iterator. This
+        /// function will be called on every yield/iteration.
+        step: Arc<dyn Fn(u64, Option<u64>, u64, u64) -> Option<u64> + Send+Sync+'static>,
     }
 
-    pub struct Work {
+    /// # Description
+    /// DIter is a Distributed Iterator with which is initialized with a map function and a set
+    /// of constraints to bound its iteration for use across threads ~~and processes~~. This
+    /// iterator can then be passed to threads which will yield values in a thread-safe manner.
+    /// 
+    /// Everything that this type does could be done using standard types and traits. However, that 
+    /// would necessitate caring around extra values such as the constraints that are required by
+    /// this type. The advantage of this method is in  the primary use case of this type: 
+    /// multi-threaded iteration/synchronization. By specifying the map and its constraints up
+    /// front you can avoid carrying around the bounds in each thread.
+    ///
+    ///
+    /// The next two examples demonstrate arithmetic iteration:
+    ///
+    /// ```
+    /// # use super_massive_io::queue::work::DIter;
+    /// let map = move |_lower_bound, current: Option<u64>, _upper_bound, _iteration| {
+    ///     match current {
+    ///         Some(v) => Some(v +1),
+    ///         None => None
+    ///     }
+    /// };
+    ///
+    /// let work = DIter::new(u64::MIN, u64::MAX, 1024, map);
+    ///
+    /// let mut expected: u64 = 0;
+    /// work.into_iter()
+    ///     .for_each(|((current, iteration)) | {
+    ///         assert!(current == expected);
+    ///         assert!(iteration == expected);
+    ///
+    ///         expected += 1;
+    ///     });
+    /// ```
+    ///
+    /// Using the current iteration as parameter in to calculate `current`.
+    ///
+    /// ```
+    /// # use super_massive_io::queue::work::DIter;
+    /// let map = move |_l, current: Option<u64>, _u, i| {
+    ///     match current {
+    ///         Some(v) => Some(i * v + 1),
+    ///         None => None,
+    ///     }
+    /// };
+    ///
+    /// let work = DIter::new(u64::MIN, u64::MAX, 8, map);
+    ///
+    /// let mut expected: u64 = 0;
+    /// work.into_iter()
+    ///     .for_each(|(v, i) | {
+    ///         assert_eq!(v, expected);
+    ///
+    ///         expected += i * v + 1;
+    ///     });
+    /// ```
+    /// However, because the closure is provided information about constraints and current state,
+    /// iterate can take on much more interesting forms. Below is an iterator that yields
+    /// `iteration_max` random values from the provided range [`lower_bound`, `upper_bound`).
+    ///
+    /// ```
+    /// # use super_massive_io::queue::work::DIter;
+    /// # use rand_xoshiro::{
+    /// #     Xoroshiro128PlusPlus,
+    /// #     rand_core::{
+    /// #         RngCore,
+    /// #         SeedableRng
+    /// #     }
+    /// # };
+    ///
+    ///  let seed: u64 = 0xDEAD0A75;
+    ///  let (lower_bound, upper_bound): (u64, u64) = (0, 1024);
+    ///  let iteration_max: u64 = 64;
+    ///
+    ///  let random_bounded_map =  move |_l, _c: Option<u64>, u, i| {
+    ///          let next = Xoroshiro128PlusPlus::seed_from_u64(seed + i).next_u64() % u;
+    ///          Some(next)
+    ///  };
+    ///
+    ///  let first_value: u64 = random_bounded_map(0,None,upper_bound,0).unwrap();
+    ///
+    ///  let work = DIter::new_with_state((first_value, 0),
+    ///                                  lower_bound,
+    ///                                  upper_bound,
+    ///                                  iteration_max,
+    ///                                  random_bounded_map);
+    ///
+    ///  let mut yielded: Vec<(u64,u64)> = work.into_iter().map(|(v,i)| {(v,i)}).collect();
+    ///
+    ///  /// Analogous results using standard iterator with map.
+    ///  let mut rng = Xoroshiro128PlusPlus::seed_from_u64(seed);
+    ///
+    ///  let expected: Vec<(u64,u64)> = (lower_bound as usize..upper_bound as usize)
+    ///                                  .into_iter()
+    ///                                  .map(|i| { 
+    ///                                      let next = Xoroshiro128PlusPlus::seed_from_u64(seed + i as u64)
+    ///                                                    .next_u64() % upper_bound;
+    ///                                      (next,i as u64)
+    ///                                  }).collect();
+    ///
+    ///  yielded.iter().zip(&expected).map(|(a,b)| { assert!(a == b)} );
+    /// ```
+    ///
+    /// # Internal Iteration
+    ///
+    /// The `iteration` value yielded by `DIter` and the number of invocations to `next` are not
+    /// one-to-one. The provided step function may be called many times before yielded a value for
+    /// use. By way of example, consider the following:
+    ///
+    /// ```
+    /// use super_massive_io::queue::work::DIter;
+    /// 
+    /// // Yields only a single valid value...
+    /// let map = move |lower_bound, current: Option<u64>, upper_bound, iteration| {
+    ///     if iteration %  2 == 0 { Some(iteration) }
+    ///     else { None }
+    /// };
+    ///
+    /// let work = DIter::new(u64::MIN, u64::MAX, 1024, map);
+    ///
+    /// let mut enumerate_index: usize = 0;
+    /// work.into_iter()
+    ///     .enumerate()
+    ///     .for_each(|(i, (current, iteration)) | {
+    ///         assert!(iteration % 2 == 0);  // iteration is always even
+    ///         assert!(i == enumerate_index); // strictly sequential
+    ///         enumerate_index += 1;
+    ///     });
+    /// ```
+    ///
+    /// # Synchronization
+    /// This type is a composite of two other types: `State` and `Constraints`. Constraints is 
+    /// never modified. All modified fields are restricted to the `State` type.
+    ///
+    /// Currently, synchronization for this type is handled via a `Arc<Mutex<_>>`. Thus us is
+    /// thread-safe. The lock for the mutex is acquired _only_ within the `next` function.
+    /// In the case of simple `map` this synchronization should be light-weight (low
+    /// contention). This will become less light-weight as the `map` is more 
+    /// computationally expensive (more time in lock) or if there are _many_ calls to
+    /// `map` required to find a valid value. As an example, the below would be a
+    /// degenerate case:
+    ///
+    /// ```no_run
+    /// use super_massive_io::queue::work::DIter;
+    /// 
+    /// // Yields only a single valid value...
+    /// let map = move |lower_bound, current: Option<u64>, upper_bound, iteration| {
+    ///     if iteration == (u64::MAX -1) { Some(iteration) }
+    ///     else { None }
+    /// };
+    ///
+    /// let work = DIter::new(u64::MIN, u64::MAX, u64::MAX, map);
+    ///
+    /// work.into_iter().for_each(|(c, i) | { /* accidental spin-lock */ });
+    /// ```
+    ///
+    /// ## Future Improvements
+    /// It is the hope of the author to extend this type to multi-process safety using Shared
+    /// Memory programming.
+    ///
+    /// 
+    /// # Validity
+    ///
+    /// Initial state of the iterator _must_ be in the domain of `map`. If you provide a
+    /// step function in which the initial state, (0,0) by default, is not in the domain of the 
+    /// step function then the iterator is invalid. Note that invalid means strictly that the
+    /// yielded values are not in the domain of the supplied closure. The iterator may continue to
+    /// yield values! Further, the element of the iterator may be the only invalid element. 
+    ///
+    /// The two below example illustrate iterator validity. In both define a `map` which
+    /// has only odd values in its domain (i.e. f(x) % 2 = 1). 
+    ///
+    /// ```should_panic
+    /// use super_massive_io::queue::work::DIter;
+    /// let map = move |lower_bound, current: Option<u64>, upper_bound, iteration| {
+    ///     if iteration % 2 == 1 { Some(iteration) }
+    ///     else { None }
+    /// };
+    ///
+    /// let work = DIter::new(u64::MIN, u64::MAX, 1024 /*iter max*/, map);
+    ///
+    /// // This will panic! First yielded value is (0,0) which is not in the domain of `map`
+    /// work.into_iter().for_each(|(c, i) | { assert!(c % 2 == 1) });
+    /// ```
+    /// Instead, one must specific the initial state using the `new_with_state` function to ensure
+    /// that the first yielded value is in the domain-- as follows.
+    ///
+    /// ```
+    /// use super_massive_io::queue::work::DIter;
+    /// let map = move |lower_bound, current: Option<u64>, upper_bound, iteration| {
+    ///     if iteration % 2 == 1 { Some(iteration) }
+    ///     else { None }
+    /// };
+    ///
+    /// let work = DIter::new_with_state((1,1), u64::MIN, u64::MAX, 1024 /*iter max*/, map);
+    ///
+    /// // Does not panic. 
+    /// work.into_iter().for_each(|(c, i) | { assert!(c % 2 == 1) });
+    /// ```
+    ///
+    /// In some cases such as an iterator that yields random values in some range, the first value
+    /// being non-random may be acceptable. 
+    #[derive(Clone)]
+    pub struct DIter {
         constraints: Constraints,
+        state: Arc<Mutex<State>> // TODO: Should this use Atomics internally instead?
+    } impl DIter {
 
-        state: Arc<Mutex<State>>
-    } impl Work {
-        pub fn new<F>(lower_bound: u64, upper_bound: u64, iteration_max: u64, step_function: F) -> Work
-            where F: Fn(u64, Option<u64>, u64) -> Option<u64> + Send+Sync+'static
+        /// Creates a new DIter with initial state (current, iteration) = (0,0). Parameters to this
+        /// function define and bound the behavior of the iteration.
+        /// - `range`: the half-open range for which the iterator has valid values.
+        /// - `iteration_max`: the number of invocations of `map` before the iterator is
+        ///         exhausted.
+        /// - `map`: closure defining how to calculate the next value (iteration n+1).
+        pub fn new<F>(lower_bound: u64, upper_bound: u64, iteration_max: u64, map: F) -> DIter
+            where F: Fn(u64, Option<u64>, u64, u64) -> Option<u64> + Send+Sync+'static
+        {
+            DIter::new_with_state((0, 0),
+                                 lower_bound..upper_bound, 
+                                 iteration_max,
+                                 map)
+        }
+
+        /// Creates a new DIter with initial state provided in `initial_state`. Parameters to this
+        /// function define and bound the behavior of the iteration.
+        /// - `initial`: the first value returned by the iterator.
+        /// - `range`: valid range of the iterator.
+        /// - `iteration_max`: the number of invocations of `map` before the iterator is
+        ///         exhausted.
+        /// - `map`: closure defining how to calculate the next value (iteration n+1).
+        pub fn new_with_state<F>(initial: (u64, u64), range: Range<u64>, iteration_max: u64, map: F) -> DIter
+            where F: Fn(u64, Option<u64>, u64, u64) -> Option<u64> + Send+Sync+'static
         {
             let constraints = Constraints {
-                        lower_bound,
-                        upper_bound,
+                        range,
                         iteration_max,
-                        step: Arc::new(step_function),
             };
             let state = Arc::new(Mutex::new( 
                         State {
-                            current: Some(0),
-                            iteration: 0
+                            current: Some(initial.0),
+                            iteration: initial.1,
+                            step: Arc::new(map),
                         }
             ));
-
-            Work { constraints, state }
+            DIter { constraints, state }
         }
-    } impl Iterator for Work {
-        type Item = u64;
+    } impl Iterator for DIter {
+        type Item = (u64,u64);
 
+        /// Implements iteration on DIter. This has the following properties:
+        /// - The _current_ value is calculated in the previous iteration.
+        /// - `step` function can be called multiple times per invocation of `next`.
+        /// - `iteration`:
+        ///     - is a purely monotonic and sequential value.
+        ///     - refers only to `step` function invocation.
+        ///     - corresponds to invocations of the provided `step` function.
+        ///     - increments on each invocation of the `step` function.
         fn next(&mut self) -> Option<Self::Item> {
-            let mut state = self.state.lock().expect("Work iterator lock poisoned-- panic!");
+            let mut state = self.state.lock().expect("State mutex, for `advance`, poisoned-- panic!");
+            let constraints = &self.constraints;
 
+            let yielded: Option<(u64, u64)> = match state.current {
+                // If we have _None_ then the previous invocation of `next`
+                // exhausted the life of the iterator and there are no 
+                // remaining values in the iterator.
+                None => None,
+                Some(work) => Some((work, state.iteration)),
+            };
 
-            let yielded_value: Option<u64> = state.current; // We can do this because
-                                                      // we validate current <-- next
-                                                      // below.
-
-            let mut next: Option<u64> = (self.constraints.step)(self.constraints.lower_bound,
-                                                                 state.current,
-                                                                 self.constraints.upper_bound);
-            state.iteration += 1;
-
-            // Attempt to get a Some(_) until we exceed iterations count irrespective of
-            // bounds.
-            while next.is_none() && state.iteration < self.constraints.iteration_max {
-                next = (self.constraints.step)(self.constraints.lower_bound, state.current, self.constraints.upper_bound);
+            loop { // Calculate the next yieldable value.
                 state.iteration += 1;
+                state.current = (state.step)(constraints.range.start,
+                                             state.current,
+                                             constraints.range.end,
+                                             state.iteration);
+
+                // We have a valid next value
+                if state.current.is_some() && constraints.are_respected(&state) { break; }
+                
+                // iterator is exhausted
+                if !constraints.is_live(&state) { state.current = None; break;}
             }
-
-            if !self.constraints.contains(next) || self.constraints.iteration_max <= state.iteration
-            { next = None; }
-
-            state.current = next; // save for next iteration
-
-            yielded_value
+            yielded
         }
-    }
+    } 
+    // TODO Justify this
+    unsafe impl Send for DIter {}
+    // TODO Justify this
+    unsafe impl Sync for DIter {}
 
     #[allow(unused)]
     mod testing {
-        mod single_thread {
-            const LOWER_BOUND: u64 = 0;
-            const UPPER_BOUND: u64 = 3 /*rows*/ * 4 /*columns*/;
-            const ITERATION_MAX: u64 = 12;
-            use std::sync::{Mutex,Arc};
-            use super::super::Work;
+        use std::sync::{
+            Mutex,
+            Arc,
+            atomic::{
+                AtomicU64,
+                Ordering
+            }
+        };
+        use rayon::{
+            ThreadPoolBuilder,
+            iter::{
+                IntoParallelIterator,
+                ParallelIterator as _
+            }
+        };
+        use rand_xoshiro::{
+            Xoroshiro128PlusPlus,
+            rand_core::{
+                RngCore,
+                SeedableRng
+            }
+        };
+        use super::DIter;
+        const STARTING_VALUE: u64 = 0;
+        const LOWER_BOUND: u64 = 0;
+        const UPPER_BOUND: u64 = 3 /*rows*/ * 4 /*columns*/;
+        const ITERATION_MAX: u64 = 12;
+        const RNG_SEED: u64 = 0xDEADBEEF;
+
+        /// Test the following invariants related to `DIter`:
+        /// - `iteration`:
+        ///     - is a purely monotonic and sequential value.
+        ///     - increments on each invocation of the `step` function.
+        mod single_threaded {
+            use super::*;
 
             #[test]
-            fn monotonic_iteration() {
+            /// iteration is a purely monotonic and sequential value.
+            fn iteration_is_monotonic_and_sequential() {
 
-                // test basic serial && sequential iteration.
-                let sequenial_step_func = |_lower, current: Option<u64>, _upper| {
+                let sequenial_map = |_l, current: Option<u64>, _u, _i| {
                         let next = if current.is_some() {
                             Some(current.unwrap() + 1)
                         } else { None };
                         next
                 };
+                let work = DIter::new(LOWER_BOUND,
+                                     UPPER_BOUND,
+                                     ITERATION_MAX,
+                                     sequenial_map);
 
-                let sequential_work = Work::new(LOWER_BOUND,
-                                                UPPER_BOUND,
-                                                ITERATION_MAX,
-                                                sequenial_step_func);
+                let yielded: Vec<(u64,u64)> = work.into_iter().collect();
+                let expected: Vec<(u64,u64)> = (0..12).into_iter().map(|i|{(i, i)}).collect();
 
-                let mut expected_value: u64 = 0;
-                sequential_work.into_iter().for_each(|value| {
-                    assert!(value == expected_value, "sequential: value ({}) != ({}) expected_value", value, expected_value);
-
-                    println!("sequential: value ({}) ?= ({}) expected", value, expected_value);
-
-                    expected_value += 1;
-                });
-
-
-
-                // Test non-sequential but monotonically increasing iterations. Not that this
-                // means we'll skip some values and reach the UPPER_BOUND early.
-                let arithmetic_step_func = move |_lower_bound, current: Option<u64>, _upper_bound| {
-                        let next = if current.is_some() {
-                            Some(2 * current.unwrap() + 3)
-                        } else { None };
-                        next
-                };
-
-                let arithemtic_work = Work::new(LOWER_BOUND,
-                                                UPPER_BOUND,
-                                                ITERATION_MAX,
-                                                arithmetic_step_func);
-                let mut expected_value: u64 = 0;
-                arithemtic_work.into_iter().for_each(|value| {
-                    assert!(value == expected_value, "artimetic: value ({}) != ({}) expected_value", value, expected_value);
-
-                    println!("arithmetic: value ({}) ?= ({}) expected", value, expected_value);
-
-                    expected_value = 2 * expected_value + 3;
-                });
+                assert_eq!(yielded, expected);
             }
 
             #[test]
-            fn random_iteration() {
-                use rand_xoshiro::rand_core::{RngCore, SeedableRng};
-                use rand_xoshiro::Xoroshiro128PlusPlus;
+            ///  iteration increments on each invocation of the `step` function.
+            fn iteration_is_of_map() {
+                current_is_static();
+                current_is_out_of_bounds();
+                current_bounded_to_lower_half();
+                only_odd_values();
+                only_even_values();
+                random_bounded();
+            }
 
+            fn current_is_static() {
+                let static_step = |_l, current: Option<u64>, _u, _i| { current };
+                let work = DIter::new(LOWER_BOUND,
+                                      UPPER_BOUND,
+                                      ITERATION_MAX,
+                                      static_step);
 
-                // ------------------------------------------------------------------------------
-                // Use a random function to iterate through the work-space defined by
-                // [LOWER_BOUND, UPPER_BOUND] with ITERATION_MAX `*_step_func` calls.
-                // Thus for this test we cannot validate the yielded value as it may be random.
-                // Rather, we only validate is exists within the constraints outlined at the top of
-                // the module. 
-                // ------------------------------------------------------------------------------
+                let yielded: Vec<(u64,u64)> = work.into_iter().collect();
+                let expected: Vec<(u64,u64)> = (0..12).into_iter().map(|i|{(0, i)}).collect();
 
-                let rng = Arc::new(Mutex::new(Xoroshiro128PlusPlus::seed_from_u64(0xdeadb33f)));
+                assert_eq!(yielded, expected);
+            }
 
-                let random_range_step_func = move |__lower_bound, current, upper_bound| {
-                        let next = rng.lock().unwrap().next_u64() % upper_bound;
+            fn current_is_out_of_bounds() {
+
+                // Check _liveness_ is independent of _bounds_
+                // ---------------------------------------------------------------
+                let null_step = |_l, _c, _u, _i| { Some(UPPER_BOUND) };  // UPPER_BOUND is
+                                                                         // exclusive
+                let work = DIter::new(LOWER_BOUND,
+                                     UPPER_BOUND,
+                                     ITERATION_MAX,
+                                     null_step);
+
+                let yielded: Vec<(u64,u64)> = work.into_iter().collect();
+                let expected: Vec<(u64,u64)> = vec![(0, 0)];
+
+                assert_eq!(yielded, expected);
+            }
+
+            fn current_bounded_to_lower_half() {
+                let iteration_bounds_exclusive: u64 = ITERATION_MAX / 2;
+                let value_last: u64 = iteration_bounds_exclusive - 1;
+                
+                let next = move |_l, c: Option<u64>, _u, i| {
+                    if c.is_some() && i < iteration_bounds_exclusive {
+                        Some(i)
+                    } else { None }
+                };
+
+                let work = DIter::new(LOWER_BOUND,
+                                     UPPER_BOUND,
+                                     ITERATION_MAX,
+                                     next);
+
+                let expected: Vec<u64> = (0..12).into_iter()
+                                                .filter(|x| { x < &iteration_bounds_exclusive })
+                                                .collect();
+                let yielded: Vec<u64> = work.into_iter().map(|(v,i)| {v}).collect();
+                assert_eq!(yielded, expected);
+
+            }
+
+            fn only_odd_values() {
+                let value_last_expected: u64 = match (UPPER_BOUND - 1) % 2 {
+                    0 => { UPPER_BOUND - 2 },
+                    1 => { UPPER_BOUND - 1 },
+                    _ => { unreachable!("Only two cases for modulus 2"); }
+
+                };
+
+                let next = move |_l, c: Option<u64>, _u, i| {
+                    if i % 2 == 1 { Some(i) } 
+                    else { None }
+                };
+
+                // Must provide valid first/initial
+                let work = DIter::new_with_state((1, 1),
+                                                LOWER_BOUND..UPPER_BOUND,
+                                                ITERATION_MAX,
+                                                next);
+
+                let expected: Vec<u64> = (0..12).into_iter().filter(|x| { x % 2 == 1 }).collect();
+                let mut yielded: Vec<u64> = work.into_iter().map(|(v,i)| {v}).collect();
+
+                assert_eq!(yielded, expected);
+            }
+
+            fn only_even_values() {
+                let value_last_expected: u64 = match (UPPER_BOUND - 1) % 2 {
+                    0 => { UPPER_BOUND - 1 },
+                    1 => { UPPER_BOUND - 2 },
+                    _ => { unreachable!("Only two cases for modulus 2"); }
+
+                };
+
+                let next = move |_l, c: Option<u64>, _u, i| {
+                    if i % 2 == 0 {
+                        Some(i)
+                    } else { None }
+                };
+
+                let work = DIter::new_with_state((0, 0),
+                                                LOWER_BOUND..UPPER_BOUND,
+                                                ITERATION_MAX,
+                                                next);
+
+                let expected: Vec<u64> = (0..12).into_iter().filter(|x| { x % 2 == 0 }).collect();
+                let mut yielded: Vec<u64> = work.into_iter().map(|(v,i)| {v}).collect();
+
+                assert_eq!(yielded, expected);
+            }
+
+            fn random_bounded() {
+                let random_bounded_map =  move |_l, _c: Option<u64>, upperbound, i| {
+                        // TODO: replace this with a hasher or the like. Done need to generate/use
+                        // an iterator.
+                        let next = Xoroshiro128PlusPlus::seed_from_u64(RNG_SEED + i).next_u64() % upperbound;
                         Some(next)
                 };
 
-                let random_bounded_work = Work::new(LOWER_BOUND.clone(),
-                                                    UPPER_BOUND.clone(), 
-                                                    ITERATION_MAX, 
-                                                    random_range_step_func);
+                let first_value: u64 = random_bounded_map(0,None,UPPER_BOUND,0).unwrap();
 
-                let mut iteration_count: u64 = 0;
-                random_bounded_work.into_iter().for_each(|value| {
-                    assert!(LOWER_BOUND <= value && value <= UPPER_BOUND);
+                // Provide initial state because default initial state (0,0) is not valid for
+                // random iterator.
+                let work = DIter::new_with_state((first_value, 0),
+                                                LOWER_BOUND..UPPER_BOUND.clone(),
+                                                ITERATION_MAX,
+                                                random_bounded_map);
 
-                    println!("bounded: (LOWER_BOUND) {LOWER_BOUND} <= {value} && {value} <= {UPPER_BOUND} (UPPER_BOUND)");
+                let mut rng = Xoroshiro128PlusPlus::seed_from_u64(0xdeadb33f);
 
-                    iteration_count += 1;
-                });
-                assert!(iteration_count == ITERATION_MAX, "count {iteration_count} != {ITERATION_MAX} max");
+                let expected: Vec<(u64,u64)> = (LOWER_BOUND as usize..UPPER_BOUND as usize)
+                                                .into_iter()
+                                                .map(|i| { 
+                                                    let next = Xoroshiro128PlusPlus::seed_from_u64(RNG_SEED + i as u64)
+                                                                  .next_u64() % UPPER_BOUND;
+                                                    (next,i as u64)
+                                                }).collect();
 
+                let mut yielded: Vec<(u64,u64)> = work.into_iter().map(|(v,i)| {(v,i)}).collect();
 
-
-                // ------------------------------------------------------------------------------
-                // This tests using an unbounded [0, u64::MAX] rng to generate the `next` values.
-                // This should essentially mean Some(_) is never yielded. However, check that it
-                // iterates at most `ITERATION_MAX` times. In actuality, we use the same seed, so
-                // we can know what the sequence will be (should not depend on this).
-                // ------------------------------------------------------------------------------
-                let rng = Arc::new(Mutex::new(Xoroshiro128PlusPlus::seed_from_u64(0xdeadb33f)));
-                let random_unbounded_step_func =  move |_lower_bound, _current, _upper_bound| {
-                        let next = rng.lock().unwrap().next_u64();
-                        Some(next)
-                };
-
-                let random_unbounded_work = Work::new(LOWER_BOUND.clone(),
-                                                      UPPER_BOUND.clone(),
-                                                      ITERATION_MAX,
-                                                      random_unbounded_step_func);
-
-                let mut iteration_count: u64 = 0;
-                random_unbounded_work.into_iter().for_each(|value| {
-                    assert!(LOWER_BOUND <= value && value <= UPPER_BOUND);
-
-                    println!("unbounded: (LOWER_BOUND) {LOWER_BOUND} <= {value} && {value} <= {UPPER_BOUND} (UPPER_BOUND)");
-
-                    iteration_count += 1;
-                });
-                assert!(iteration_count <= ITERATION_MAX);
+                assert_eq!(yielded, expected);
             }
         }
 
-        mod multi_thread {
-            const LOWER_BOUND: u64 = 0;
-            const UPPER_BOUND: u64 = 3 /*rows*/ * 4 /*columns*/;
-            const ITERATION_MAX: u64 = 12;
-            use std::sync::{Mutex,Arc};
-            use rayon::{
-                ThreadPoolBuilder,
-                iter::{
-                    IntoParallelIterator,
-                    ParallelIterator as _
-                }
-            };
-            use super::super::Work;
+        mod multithreaded {
+            use super::*;
 
             #[test]
-            fn monotonic_iteration() {
-
+            fn iteration_is_monotonic_and_sequential() {
                 let cpus: usize = std::thread::available_parallelism().unwrap().into();
                 let pool = ThreadPoolBuilder::new().num_threads(cpus)
                                                    .build()
                                                    .unwrap();
 
-                // test basic serial && sequential iteration.
-                let sequenial_step_func = |_lower, current: Option<u64>, _upper| {
+                let sequenial_map = |_l, current: Option<u64>, _u, _i| {
                         let next = if current.is_some() {
                             Some(current.unwrap() + 1)
                         } else { None };
                         next
                 };
+                let work = &DIter::new(LOWER_BOUND,
+                                       UPPER_BOUND,
+                                       ITERATION_MAX,
+                                       sequenial_map);
 
-                let sequential_work = Work::new(LOWER_BOUND,
-                                                UPPER_BOUND,
-                                                ITERATION_MAX,
-                                                sequenial_step_func);
 
-                let mut expected_value: u64 = 0;
-                //sequential_work.into_iter().for_each(|value| {
-                //    assert!(value == expected_value, "sequential: value ({}) != ({}) expected_value", value, expected_value);
+                let yielded: Arc<Mutex<Vec<(u64,u64)>>> = Arc::new(Mutex::new(Vec::new()));
+                let expected: Vec<(u64,u64)> = (0..12).into_iter().map(|i| {(i,i)}).collect();
 
-                //    println!("sequential: value ({}) ?= ({}) expected", value, expected_value);
+                let yielded_thread = yielded.clone();
 
-                //    expected_value += 1;
-                //});
                 pool.install(|| {
                     (0..cpus).into_par_iter()
-                             .for_each(|_|{
-                                     todo!();
+                             .for_each(move |tid: usize|{
+                                 let thread_work = work.clone();
+                                 let yielded = yielded_thread.clone();
+
+                                 thread_work.into_iter()
+                                            .for_each(|work| {
+                                                yielded.lock()
+                                                       .expect("Lock poisoned")
+                                                       .push(work);
+                                            });
                              });
                 });
+
+                yielded.lock().expect("Lock poisoned").clone().iter().zip(&expected).enumerate().map(|(i, (a,b))| { assert!(a == b)} );
+            }
+
+            #[test]
+            fn random_bounded() {
+                let cpus: usize = std::thread::available_parallelism().unwrap().into();
+                let pool = ThreadPoolBuilder::new().num_threads(cpus)
+                                                   .build()
+                                                   .unwrap();
+                let random_bounded_map =  move |_l, _c: Option<u64>, upperbound, i| {
+                        // TODO: replace this with a hasher or the like. Done need to generate/use
+                        // an iterator.
+                        let next = Xoroshiro128PlusPlus::seed_from_u64(RNG_SEED + i).next_u64() % upperbound;
+                        Some(next)
+                };
+
+                let first_value: u64 = random_bounded_map(0,None,UPPER_BOUND,0).unwrap();
+
+                // Provide initial state because default initial state (0,0) is not valid for
+                // random iterator.
+                let work = DIter::new_with_state((first_value, 0),
+                                                (LOWER_BOUND..UPPER_BOUND.clone()),
+                                                 ITERATION_MAX,
+                                                 random_bounded_map);
+
+                let mut rng = Xoroshiro128PlusPlus::seed_from_u64(0xdeadb33f);
+
+                let yielded: Arc<Mutex<Vec<(u64,u64)>>> = Arc::new(Mutex::new(Vec::new()));
+                let expected: Vec<(u64,u64)> = (LOWER_BOUND as usize..UPPER_BOUND as usize)
+                                                .into_iter()
+                                                .map(|i| { 
+                                                    let next = Xoroshiro128PlusPlus::seed_from_u64(RNG_SEED + i as u64)
+                                                                  .next_u64() % UPPER_BOUND;
+                                                    (next,i as u64)
+                                                }).collect();
+
+
+                let yielded_thread = yielded.clone();
+
+                pool.install(|| {
+                    (0..cpus).into_par_iter()
+                             .for_each(move |tid: usize|{
+                                 let thread_work = work.clone();
+                                 let yielded = yielded_thread.clone();
+
+                                 thread_work.into_iter()
+                                            .for_each(|work| {
+                                                yielded.lock()
+                                                       .expect("Lock poisoned")
+                                                       .push(work);
+                                            });
+                             });
+                });
+                yielded.lock().expect("Lock poisoned!").clone().iter().zip(&expected).enumerate().map(|(i, (a,b))| { assert!(a == b)} );
             }
         }
     }
-} 
+}
