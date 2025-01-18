@@ -39,7 +39,7 @@ use super_massive_io::{
     bookcase::{BookCasePlans, BookCase},
     chapter::Chapter,
     page::Page,
-    //queue::Queue, 
+    queue::work::DIter,
     //Inspector, 
     PAGES_PER_CHAPTER, 
     PAGE_BYTES
@@ -303,13 +303,13 @@ fn main() -> Result<()> {
     if *args.get_one("verify").unwrap()    { modes.push(Mode::Verify); }
     if *args.get_one("tear-down").unwrap() { modes.push(Mode::Teardown); }
 
-    let _pcount: u64 = *args.get_one("page-count").expect("[Error] Developer Error: no page count");
+    let pcount: u64 = *args.get_one("page-count").expect("[Error] Developer Error: no page count");
     let seed: u64 = *args.get_one("seed").expect("[Error] Seed must be provided as a integer");
 
     let bookcase: BookCase = setup_bookcase(args).expect("[Error] Could not setup file structure!");
 
     // This should check if bookcase even needs creating
-    let _fcount = bookcase.book_count();
+    let fcount = bookcase.book_count();
 
     const P: usize = PAGES_PER_CHAPTER;
     const W: usize = PAGE_BYTES / 8 - 4;
@@ -322,12 +322,16 @@ fn main() -> Result<()> {
         .for_each(|mode| { 
             match mode {
                Mode::Create | Mode::Bench => {
-                   /*
                    let stride: u64 = 1;
-                   let queue: Queue = Queue::new(0, fcount*pcount -1, move |current| {
-                       Some(current + stride)
-                   });
-                   */
+
+                   let map = move |_l, current, _u, _i| {
+                       match current {
+                           Some(v) => Some(v + stride),
+                           None => None,
+                       }
+                   };
+
+                   let queue: DIter = DIter::new(0, fcount*pcount -1, fcount*pcount, map);
                    let chapter = Box::new(Chapter::<P,W,B>::new());
 
                    pool.install(|| {
@@ -335,7 +339,7 @@ fn main() -> Result<()> {
                                 .for_each(|_|{
                                     thread_worker::<P,W,B>(seed, 
                                                            mode, 
-                                                           //queue.clone(), 
+                                                           queue.clone(), 
                                                            chapter.clone(), 
                                                            bookcase.clone(),
                                      );
@@ -351,22 +355,26 @@ fn main() -> Result<()> {
 
 //TODO There should be some distinct function for each Read and Write mode
  fn thread_worker<const P:usize,const W: usize,const B: usize>(
-      _seed: u64, 
+      seed: u64, 
       mode: &Mode,
-      //queue: Queue,
-      mut _chapter: Box<Chapter<P,W,B>>,
+      queue: DIter,
+      mut chapter: Box<Chapter<P,W,B>>,
       bookcase: BookCase,
  ) {
-     let _thread_id: usize = rayon::current_thread_index().unwrap_or(0);
-     let _is_read: bool = matches!(mode, Mode::Bench);
-     let _page_count_per_book: usize = bookcase.book_size() / PAGE_BYTES;
+     let thread_id: usize = rayon::current_thread_index().unwrap_or(0);
+     let is_read: bool = matches!(mode, Mode::Bench);
+     let page_count_per_book: usize = bookcase.book_size() / PAGE_BYTES;
  
      //TODO: Flesh out this verify thing more
-     let _verify: bool = true;
+     let verify: bool = true;
+
+     let chunk_size: usize = PAGES_PER_CHAPTER;
  
  
-     /*
-     while let Some(work) = queue.take_work() {
+     queue.into_iter()
+          .step_by(PAGES_PER_CHAPTER)
+          .for_each(|(work, _i)| 
+     {
          let page_id = work % page_count_per_book as u64;
          let book_id = work / page_count_per_book as u64;
  
@@ -383,14 +391,16 @@ fn main() -> Result<()> {
          if is_read {
              let buffer: &mut [u8] = chapter.mutable_bytes_all();
              let bytes_read: usize = book_file.read(buffer).expect("Could not read from file!");
-             if bytes_read == 0 || bytes_read % PAGE_BYTES != 0 { break; } // This should emit a debug
+
+             // This should emit a debug
+             if bytes_read == 0 || bytes_read % PAGE_BYTES != 0 { return; }
          }  
          
  
          // Iterate over the range {page_id, page_id + work_chunk}
-         (page_id..(page_id+queue.chunk_size())).for_each(|p|{ // FIXME: Incorporate chunksize into
+         (page_id..(page_id+PAGES_PER_CHAPTER as u64)).for_each(|p|{ // FIXME: Incorporate chunksize into
                                                                // queue some how?
-             let chapter_relative_page_id = p % queue.chunk_size();
+             let chapter_relative_page_id = p % PAGES_PER_CHAPTER as u64;
              if is_read {
                  if !chapter.mutable_page(chapter_relative_page_id).is_valid() {
                      let (s, f, p, m) = chapter.mutable_page(chapter_relative_page_id).get_metadata();
@@ -412,8 +422,7 @@ fn main() -> Result<()> {
          }
  
          let bytes_completed: u64 = chapter.byte_count() as u64;
-     }
-     */
+     });
  }
 
 
