@@ -361,14 +361,14 @@ fn main() -> Result<()> {
       mut chapter: Box<Chapter<P,W,B>>,
       bookcase: BookCase,
  ) {
-     let thread_id: usize = rayon::current_thread_index().unwrap_or(0);
+     let _thread_id: usize = rayon::current_thread_index().unwrap_or(0);
      let is_read: bool = matches!(mode, Mode::Bench);
      let page_count_per_book: usize = bookcase.book_size() / PAGE_BYTES;
  
      //TODO: Flesh out this verify thing more
      let verify: bool = true;
 
-     let chunk_size: usize = PAGES_PER_CHAPTER;
+     let chunk_size: u64 = PAGES_PER_CHAPTER as u64;
  
  
      queue.into_iter()
@@ -398,9 +398,9 @@ fn main() -> Result<()> {
          
  
          // Iterate over the range {page_id, page_id + work_chunk}
-         (page_id..(page_id+PAGES_PER_CHAPTER as u64)).for_each(|p|{ // FIXME: Incorporate chunksize into
+         (page_id..(page_id+chunk_size)).for_each(|p|{ // FIXME: Incorporate chunksize into
                                                                // queue some how?
-             let chapter_relative_page_id = p % PAGES_PER_CHAPTER as u64;
+             let chapter_relative_page_id = p % chunk_size;
              if is_read {
                  if !chapter.mutable_page(chapter_relative_page_id).is_valid() {
                      let (s, f, p, m) = chapter.mutable_page(chapter_relative_page_id).get_metadata();
@@ -421,7 +421,7 @@ fn main() -> Result<()> {
              book_file.flush().expect("Could not flush file");
          }
  
-         let bytes_completed: u64 = chapter.byte_count() as u64;
+         let _bytes_completed: u64 = chapter.byte_count() as u64;
      });
  }
 
