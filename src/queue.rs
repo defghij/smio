@@ -128,9 +128,21 @@ pub mod work {
     }
 
     /// # Description
-    /// DIter is a Distributed Iterator with which is initialized with a map function and a set
-    /// of constraints to bound its iteration for use across threads ~~and processes~~. This
+    /// DIter is a Distributed Iterator, which is initialized with a map function and a set
+    /// of constraints to bound its iteration, for use across threads ~~and processes~~. This
     /// iterator can then be passed to threads which will yield values in a thread-safe manner.
+    ///
+    /// A DIter is composed of three key parts:
+    /// - Initial State: this is (0,0) = (current, iteration) if using DIter::new()
+    /// - Constraints: There are two kinds of constraints-- Domain and Time to Live. The domain
+    ///       constraint is given by a Range<u64> as supplied by lower_bound and upper_bound. The
+    ///       time to live is the number of internal iterations that are allowed before the iteration
+    ///       unconditionally yields None.
+    /// - Mapping function: this is the closure used to determine the next value to be yielded.
+    ///
+    /// The `map` closure takes four arguments: lower_bound, current, upper_bound, and iteration.
+    /// These expose any internal state that might be needed to make an arbitrary function over the
+    /// range. This includes random value yielding.
     /// 
     /// Everything that this type does could be done using standard types and traits. However, that 
     /// would necessitate caring around extra values such as the constraints that are required by
@@ -138,6 +150,8 @@ pub mod work {
     /// multi-threaded iteration/synchronization. By specifying the map and its constraints up
     /// front you can avoid carrying around the bounds in each thread.
     ///
+    ///
+    /// # Examples
     ///
     /// The next two examples demonstrate arithmetic iteration:
     ///
@@ -233,8 +247,10 @@ pub mod work {
     /// # Internal Iteration
     ///
     /// The `iteration` value yielded by `DIter` and the number of invocations to `next` are not
-    /// one-to-one. The provided step function may be called many times before yielded a value for
-    /// use. By way of example, consider the following:
+    /// one-to-one. The provided step function may be called many times before yielding a value for
+    /// use. By way of example, consider the following example wherein one call to `next` (from
+    /// Iterator trait) coincides with two calls to the `map` function (i.e. discard odd-value, yield
+    /// even value)
     ///
     /// ```
     /// use super_massive_io::queue::work::DIter;
