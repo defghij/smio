@@ -4,7 +4,7 @@ use indicatif::HumanBytes;
 
 pub mod page;
 pub mod chapter;
-pub mod bookcase;
+pub mod constellation;
 pub mod queue;
 
 /// Size of a Page in Bytes

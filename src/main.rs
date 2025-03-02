@@ -27,22 +27,22 @@ use log::{/*info,debug,*/warn};
 //use perfcnt::{AbstractPerfCounter, PerfCounter};
 //use perfcnt::linux::{PerfCounterBuilderLinux, HardwareEventType};
 
-use indicatif::{HumanBytes, HumanDuration};
+//use indicatif::{HumanBytes, HumanDuration};
 use rayon::{
-    iter::{
-        IntoParallelIterator,
-        ParallelIterator as _
-    }, 
+    //iter::{
+        //IntoParallelIterator,
+        //ParallelIterator as _
+    //}, 
     ThreadPool
 };
 use super_massive_io::{
-    bookcase::{BookCasePlans, BookCase},
-    chapter::Chapter,
-    page::Page,
-    queue::work::DIter,
-    //Inspector, 
-    PAGES_PER_CHAPTER, 
+    constellation::*,
     PAGE_BYTES
+    //chapter::Chapter,
+    //page::Page,
+    //queue::work::DIter,
+    ////Inspector, 
+    //PAGES_PER_CHAPTER, 
 };
  
 #[allow(unused)]
@@ -205,50 +205,41 @@ fn cli_arguments() -> Command {
 /// This function handles all aspects of creating the application context
 /// type BookCase. This can be either from a configuration file or from
 /// commandline arguments.
-/// TODO: 
-/// - Overwrite config parameters if cli ones are provided
-/// - This should probably return a Result<T,E>
-///     Possible Errors: 
-///         - Cannot Create BookCase
-///         - Config File isn't valid
-///         - Config File doesn't point valid file structures.
-fn setup_bookcase(matches: ArgMatches) -> Result<BookCase> {
+fn setup_bookcase(matches: ArgMatches) -> Result<FileConstellation> {
 
-    let bookcase: BookCase;
-    if let Some(config_file) = matches.get_one::<PathBuf>("config") {
-        let cfile: &str = config_file.to_str().unwrap();
+    let files: FileConstellation;
+    //if let Some(config_file) = matches.get_one::<PathBuf>("config") {
+        //let cfile: &str = config_file.to_str().unwrap();
 
-        bookcase = BookCasePlans::from_configuration_file(cfile)?.construct()?;
-    } 
-    else {
-        if matches.value_source("path-prefix")
-                  .is_some_and(|source| source != ValueSource::CommandLine) {
-            warn!("Using default value for prefix path");
-        }
-        
-
-        // Set up the file structure
-        let pprefix: &PathBuf = matches.get_one::<PathBuf>("path-prefix").unwrap();
-        let dprefix: String  = matches.get_one::<String>("directory-prefix").unwrap().to_string();
-        let fprefix: String  = matches.get_one::<String>("book-prefix").unwrap().to_string();
-        let dcount: u64      = *matches.get_one("directory-count").unwrap();
-        let fcount: u64      = *matches.get_one("book-count").unwrap();
-        let pcount: u64      = *matches.get_one("page-count").unwrap();
-        //let direct_io: bool = *matches.get_one("o_direct").unwrap();
-
-        let bookcase_plan: BookCasePlans = BookCasePlans::new(pprefix.to_owned(),
-                                                              dprefix.to_owned(),
-                                                              dcount,
-                                                              fprefix.to_owned(),
-                                                              fcount, PAGE_BYTES * pcount as usize).expect("check path arguments");
-
-        //if direct_io { bookcase.use_direct_io() };
-
-        bookcase_plan.to_configuration_file()?;
-        bookcase = bookcase_plan.construct()?;
+        //bookcase = BookCasePlans::from_configuration_file(cfile)?.construct()?;
+    //} 
+    if matches.value_source("path-prefix")
+              .is_some_and(|source| source != ValueSource::CommandLine) {
+        warn!("Using default value for prefix path");
     }
     
-    Ok(bookcase)
+
+    // Set up the file structure
+    let pprefix: &PathBuf = matches.get_one::<PathBuf>("path-prefix").unwrap();
+    let dprefix: String   = matches.get_one::<String>("directory-prefix").unwrap().to_string();
+    let fprefix: String   = matches.get_one::<String>("book-prefix").unwrap().to_string();
+    let dcount: u64       = *matches.get_one("directory-count").unwrap();
+    let fcount: u64       = *matches.get_one("book-count").unwrap();
+    let pcount: u64       = *matches.get_one("page-count").unwrap();
+
+    // TODO: Just for testing
+    let root_a: PathBuf = PathBuf::from("/tmp/root.a");
+    let root_b: PathBuf = PathBuf::from("/tmp/root.b");
+
+    let mut files: FileConstellation = FileConstellation::new(
+        vec![root_a,root_b],
+        (dprefix, dcount),
+        (fprefix,fcount),
+        pcount * PAGE_BYTES as u64,
+        FileOptions { directo_io: false } // TODO: This should be provided by user input
+    )?;
+    
+    Ok(files)
 }
 
 #[allow(unused)]
@@ -306,169 +297,170 @@ fn main() -> Result<()> {
     let pcount: u64 = *args.get_one("page-count").expect("[Error] Developer Error: no page count");
     let seed: u64 = *args.get_one("seed").expect("[Error] Seed must be provided as a integer");
 
-    let bookcase: BookCase = setup_bookcase(args).expect("[Error] Could not setup file structure!");
 
-    // This should check if bookcase even needs creating
-    let fcount = bookcase.book_count();
+    //let bookcase: BookCase = setup_bookcase(args).expect("[Error] Could not setup file structure!");
 
-    const P: usize = PAGES_PER_CHAPTER;
-    const W: usize = PAGE_BYTES / 8 - 4;
-    const B: usize = Page::<W>::PAGE_BYTES * P;
+    //// This should check if bookcase even needs creating
+    //let fcount = bookcase.book_count();
 
-    let (pool, cpus): (ThreadPool, usize) = setup_threads();
+    //const P: usize = PAGES_PER_CHAPTER;
+    //const W: usize = PAGE_BYTES / 8 - 4;
+    //const B: usize = Page::<W>::PAGE_BYTES * P;
+
+    //let (pool, cpus): (ThreadPool, usize) = setup_threads();
 
 
-    modes.iter()
-        .for_each(|mode| { 
-            match mode {
-               Mode::Create | Mode::Bench => {
-                   let stride: u64 = 1;
+    //modes.iter()
+        //.for_each(|mode| { 
+            //match mode {
+               //Mode::Create | Mode::Bench => {
+                   //let stride: u64 = 1;
 
-                   let map = move |_l, current, _u, _i| {
-                       match current {
-                           Some(v) => Some(v + stride),
-                           None => None,
-                       }
-                   };
+                   //let map = move |_l, current, _u, _i| {
+                       //match current {
+                           //Some(v) => Some(v + stride),
+                           //None => None,
+                       //}
+                   //};
 
-                   let queue: DIter = DIter::new(0, fcount*pcount -1, fcount*pcount, map);
-                   let chapter = Box::new(Chapter::<P,W,B>::new());
+                   //let queue: DIter = DIter::new(0, fcount*pcount -1, fcount*pcount, map);
+                   //let chapter = Box::new(Chapter::<P,W,B>::new());
 
-                   pool.install(|| {
-                       (0..cpus).into_par_iter()
-                                .for_each(|_|{
-                                    thread_worker::<P,W,B>(seed, 
-                                                           mode, 
-                                                           queue.clone(), 
-                                                           chapter.clone(), 
-                                                           bookcase.clone(),
-                                     );
-                                });
-                   });
-               },
-               Mode::Verify   => single_threaded_verify(&bookcase),
-               Mode::Teardown => { let _ = bookcase.deconstruct().expect("Could not teardown files setup by application"); },
-            }
-        });
+                   //pool.install(|| {
+                       //(0..cpus).into_par_iter()
+                                //.for_each(|_|{
+                                    //thread_worker::<P,W,B>(seed, 
+                                                           //mode, 
+                                                           //queue.clone(), 
+                                                           //chapter.clone(), 
+                                                           //bookcase.clone(),
+                                     //);
+                                //});
+                   //});
+               //},
+               //Mode::Verify   => single_threaded_verify(&bookcase),
+               //Mode::Teardown => { let _ = bookcase.deconstruct().expect("Could not teardown files setup by application"); },
+            //}
+        //});
     Ok(())
 }
 
 //TODO There should be some distinct function for each Read and Write mode
- fn thread_worker<const P:usize,const W: usize,const B: usize>(
-      seed: u64, 
-      mode: &Mode,
-      queue: DIter,
-      mut chapter: Box<Chapter<P,W,B>>,
-      bookcase: BookCase,
- ) {
-     let _thread_id: usize = rayon::current_thread_index().unwrap_or(0);
-     let is_read: bool = matches!(mode, Mode::Bench);
-     let page_count_per_book: usize = bookcase.book_size() / PAGE_BYTES;
+ //fn thread_worker<const P:usize,const W: usize,const B: usize>(
+      //seed: u64, 
+      //mode: &Mode,
+      //queue: DIter,
+      //mut chapter: Box<Chapter<P,W,B>>,
+      //bookcase: BookCase,
+ //) {
+     //let _thread_id: usize = rayon::current_thread_index().unwrap_or(0);
+     //let is_read: bool = matches!(mode, Mode::Bench);
+     //let page_count_per_book: usize = bookcase.book_size() / PAGE_BYTES;
  
-     //TODO: Flesh out this verify thing more
-     let verify: bool = true;
+     ////TODO: Flesh out this verify thing more
+     //let verify: bool = true;
 
-     let chunk_size: u64 = PAGES_PER_CHAPTER as u64;
+     //let chunk_size: u64 = PAGES_PER_CHAPTER as u64;
  
  
-     queue.into_iter()
-          .step_by(PAGES_PER_CHAPTER)
-          .for_each(|(work, _i)| 
-     {
-         let page_id = work % page_count_per_book as u64;
-         let book_id = work / page_count_per_book as u64;
+     //queue.into_iter()
+          //.step_by(PAGES_PER_CHAPTER)
+          //.for_each(|(work, _i)| 
+     //{
+         //let page_id = work % page_count_per_book as u64;
+         //let book_id = work / page_count_per_book as u64;
  
-         let mut book_file: File = bookcase.open_book(book_id, is_read, !is_read)
-                                           .expect("Could  not open  file!");
+         //let mut book_file: File = bookcase.open_book(book_id, is_read, !is_read)
+                                           //.expect("Could  not open  file!");
  
-         // If this isnt the start of a file, seek to the appropriate place to begin reading
-         // data.
-         if page_id != 0 {
-             book_file.seek(SeekFrom::Start(page_id * PAGE_BYTES as u64))
-                      .expect(&format!("Unable to seek to write location in book {book_id}"));
-         }
+         //// If this isnt the start of a file, seek to the appropriate place to begin reading
+         //// data.
+         //if page_id != 0 {
+             //book_file.seek(SeekFrom::Start(page_id * PAGE_BYTES as u64))
+                      //.expect(&format!("Unable to seek to write location in book {book_id}"));
+         //}
  
-         if is_read {
-             let buffer: &mut [u8] = chapter.mutable_bytes_all();
-             let bytes_read: usize = book_file.read(buffer).expect("Could not read from file!");
+         //if is_read {
+             //let buffer: &mut [u8] = chapter.mutable_bytes_all();
+             //let bytes_read: usize = book_file.read(buffer).expect("Could not read from file!");
 
-             // This should emit a debug
-             if bytes_read == 0 || bytes_read % PAGE_BYTES != 0 { return; }
-         }  
+             //// This should emit a debug
+             //if bytes_read == 0 || bytes_read % PAGE_BYTES != 0 { return; }
+         //}  
          
  
-         // Iterate over the range {page_id, page_id + work_chunk}
-         (page_id..(page_id+chunk_size)).for_each(|p|{ // FIXME: Incorporate chunksize into
-                                                               // queue some how?
-             let chapter_relative_page_id = p % chunk_size;
-             if is_read {
-                 if !chapter.mutable_page(chapter_relative_page_id).is_valid() {
-                     let (s, f, p, m) = chapter.mutable_page(chapter_relative_page_id).get_metadata();
-                     warn!("Invalid Page Found: book {book_id}, page {page_id}");
-                     warn!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
-                 } 
-             } else {
-                 chapter.mutable_page(chapter_relative_page_id)
-                        .reinit(seed, book_id, p, 0);
-                 if verify && !chapter.page(chapter_relative_page_id).is_valid() {
-                     warn!("Validation error after write. Page {p} of file {book_id} failed its validation check!"); 
-                 }
-             }
-         });
+         //// Iterate over the range {page_id, page_id + work_chunk}
+         //(page_id..(page_id+chunk_size)).for_each(|p|{ // FIXME: Incorporate chunksize into
+                                                               //// queue some how?
+             //let chapter_relative_page_id = p % chunk_size;
+             //if is_read {
+                 //if !chapter.mutable_page(chapter_relative_page_id).is_valid() {
+                     //let (s, f, p, m) = chapter.mutable_page(chapter_relative_page_id).get_metadata();
+                     //warn!("Invalid Page Found: book {book_id}, page {page_id}");
+                     //warn!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
+                 //} 
+             //} else {
+                 //chapter.mutable_page(chapter_relative_page_id)
+                        //.reinit(seed, book_id, p, 0);
+                 //if verify && !chapter.page(chapter_relative_page_id).is_valid() {
+                     //warn!("Validation error after write. Page {p} of file {book_id} failed its validation check!"); 
+                 //}
+             //}
+         //});
  
-         if !is_read {
-             book_file.write_all(chapter.bytes_all()).unwrap();
-             book_file.flush().expect("Could not flush file");
-         }
+         //if !is_read {
+             //book_file.write_all(chapter.bytes_all()).unwrap();
+             //book_file.flush().expect("Could not flush file");
+         //}
  
-         let _bytes_completed: u64 = chapter.byte_count() as u64;
-     });
- }
+         //let _bytes_completed: u64 = chapter.byte_count() as u64;
+     //});
+ //}
 
 
-#[allow(unused)]
+//#[allow(unused)]
 // Keep this function around as a secondary check on 
 // multi-threaded read and verify.
 // Eventually this should be replaced with a multi-threaded
 // monotonic read-only access pattern worker
-fn single_threaded_verify(bookcase: &BookCase) {
-    let fcount = bookcase.book_count();
+//fn single_threaded_verify(bookcase: &BookCase) {
+    //let fcount = bookcase.book_count();
 
-    const P: usize = PAGES_PER_CHAPTER;
-    const W: usize = PAGE_BYTES / 8 - 4;
-    const B: usize = Page::<W>::PAGE_BYTES * P;
-    let mut work: u64 = 0;
+    //const P: usize = PAGES_PER_CHAPTER;
+    //const W: usize = PAGE_BYTES / 8 - 4;
+    //const B: usize = Page::<W>::PAGE_BYTES * P;
+    //let mut work: u64 = 0;
 
-    let mut chapter = Box::new(Chapter::<P,W,B>::new());
-    let now: SystemTime = SystemTime::now();
+    //let mut chapter = Box::new(Chapter::<P,W,B>::new());
+    //let now: SystemTime = SystemTime::now();
 
-    // Read from a File
-    (0..fcount).into_iter()
-               .for_each(|book| { 
-                    let mut readable_book: File = bookcase.open_book(book, true, false).expect("Could  not open  file!");
+    //// Read from a File
+    //(0..fcount).into_iter()
+               //.for_each(|book| { 
+                    //let mut readable_book: File = bookcase.open_book(book, true, false).expect("Could  not open  file!");
 
-                    loop {
-                        let writable_buffer: &mut [u8] = chapter.mutable_bytes_all();
-                        let bytes_read: usize = readable_book.read(writable_buffer).expect("Could not read from file!");
+                    //loop {
+                        //let writable_buffer: &mut [u8] = chapter.mutable_bytes_all();
+                        //let bytes_read: usize = readable_book.read(writable_buffer).expect("Could not read from file!");
 
-                        if bytes_read == 0 || bytes_read % PAGE_BYTES != 0 { break; }
+                        //if bytes_read == 0 || bytes_read % PAGE_BYTES != 0 { break; }
 
-                        chapter.pages_all()
-                               .iter()
-                               .for_each(|page|{
-                                    if !page.is_valid() {
-                                        let (s, f, p, m) = page.get_metadata();
-                                        println!("Invalid Page Found: book {book}, page {page}");
-                                        println!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
-                                    }
-                               });
-                        work += chapter.byte_count() as u64;
-                    }
-               });
-    let elapsed: Duration = now.elapsed().unwrap();
-    let nanos = elapsed.as_nanos();
-    println!("[tid:{}][read] {}, {}, {} ns/byte", rayon::current_thread_index().unwrap_or(0),
-                                                     HumanDuration(elapsed),
-                                                     HumanBytes(work),
-                                                     nanos / work as u128);
-}
+                        //chapter.pages_all()
+                               //.iter()
+                               //.for_each(|page|{
+                                    //if !page.is_valid() {
+                                        //let (s, f, p, m) = page.get_metadata();
+                                        //println!("Invalid Page Found: book {book}, page {page}");
+                                        //println!("Seed: 0x{s:X}\nFile: 0x{f:X}\nPage: 0x{p:X}\nMutations: 0x{m:X}");
+                                    //}
+                               //});
+                        //work += chapter.byte_count() as u64;
+                    //}
+               //});
+    //let elapsed: Duration = now.elapsed().unwrap();
+    //let nanos = elapsed.as_nanos();
+    //println!("[tid:{}][read] {}, {}, {} ns/byte", rayon::current_thread_index().unwrap_or(0),
+                                                     //HumanDuration(elapsed),
+                                                     //HumanBytes(work),
+                                                     //nanos / work as u128);
+//}
