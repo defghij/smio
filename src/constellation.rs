@@ -96,7 +96,8 @@ impl FileConstellation {
                directories_per_root: (String, u64),
                files_per_directory: (String, u64), 
                size_of_files: u64, 
-               options: FileOptions) -> Result<FileConstellation> {
+               options: FileOptions,
+               drop: bool) -> Result<FileConstellation> {
 
         // Validation of parameters
         roots.iter().try_for_each(|root| {
@@ -133,11 +134,28 @@ impl FileConstellation {
                                          size: Some(size_of_files),
                                          options: Some(options)
                 },
-                drop: true,
+                drop,
         };
         
         FileConstellation::instantiate(file_system_structure)
     }
+
+    pub fn from_configuration(_file: &PathBuf) -> Result<FileConstellation> {
+        unimplemented!("future feature");
+    }
+
+    pub fn open(&self, absolute_id: u64, read: bool, write: bool) -> Result<File> {
+        self.open_with_checked_id(self.file_identifier(absolute_id)?, read, write)
+    }
+
+    /// Inverts the flag that indicates whether Drop removes files from the file system.
+    pub fn toggle_drop(&mut self) { self.drop = !self.drop; }
+    
+    /// Returns the total number of files contained in the constellation
+    pub fn count(&self) -> u64 { self.files.count * self.directories.count }
+
+    /// Returns the size of a file(s), in bytes, contained in the constellation
+    pub fn size(&self) -> u64 { self.files.size.expect("files should always be declared with a size") }
 
     #[inline(always)]
     fn file_identifier(&self, absolute_id: u64) -> Result<FileIdentifier> {
@@ -151,16 +169,6 @@ impl FileConstellation {
             Ok(FileIdentifier { file, directory, root })
         }
     }
-
-    pub fn open_for_read(&self, absolute_id: u64) -> Result<File> {
-        self.open(self.file_identifier(absolute_id)?, true, false)
-    }
-
-    pub fn open_for_write(&self, absolute_id: u64) -> Result<File> {
-        self.open(self.file_identifier(absolute_id)?, false, true)
-    }
-
-    pub fn disable_drop(&mut self) { self.drop = false; }
 
     fn instantiate(fss: FileConstellation) -> Result<FileConstellation> {
         // Create all directories
@@ -193,7 +201,7 @@ impl FileConstellation {
     }
 
     #[inline(always)]
-    fn open(&self, id: FileIdentifier, read: bool, write: bool) -> Result<File> {
+    fn open_with_checked_id(&self, id: FileIdentifier, read: bool, write: bool) -> Result<File> {
         let path: PathBuf = self.construct_path(id)?;
 
         let direct_io: bool = self.files.options.clone().is_some_and(|o| o.directo_io);
@@ -319,28 +327,31 @@ pub mod tests {
     #[test]
     #[serial]
     fn create_and_destroy() {
+        use tempfile::tempdir;
 
         let fsize: u64 = 1024;
         let fcount: u64 = 12;
         let dcount: u64 = 12;
 
-        let root_a: PathBuf = PathBuf::from("/tmp/root.a");
-        let root_b: PathBuf = PathBuf::from("/tmp/root.b");
+        let root_a = tempdir().expect("crate should be able to create temporary directories");
+        let root_b = tempdir().expect("crate should be able to create temporary directories");
         let mut files: FileConstellation = FileConstellation::new(
-            vec![root_a,root_b],
+            vec![root_a.into_path(),root_b.into_path()],
             ("test_dir".to_string(), dcount),
             ("test_file".to_string(),fcount),
             fsize,
-            FileOptions { directo_io: false }
-        ).expect("Failed to instantiate FileConstellation");
+            FileOptions { directo_io: false },
+            false
+        ).expect("created directories and files");
 
-        files.disable_drop();
+        files.toggle_drop();
 
         // Test the number and characteristics of created files.
         let mut total_files: u64 = 0;
         (0..(fcount*dcount))
             .for_each(|fid| {
-                let file: File = files.open_for_write(fid).expect("Could not open the requrested file");
+                let file: File = files.open(fid, false, true)
+                                      .expect("files created at constellation instantiation");
                 match file.metadata() {
                     Ok(m) => {
                         assert!(m.is_file());
