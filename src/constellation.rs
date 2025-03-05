@@ -23,7 +23,7 @@ pub struct FileOptions {
 struct FileIdentifier {
     file: u64,
     directory: u64,
-    root: usize
+    root: u64
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,16 +38,29 @@ struct LayerInfo {
     options: Option<FileOptions>,
 }
 
-/// # Overview 
-/// This structure and its associated functions are used to create, interact with, and then remove
-/// a file layout or constellation. 
+/// # Overview                                                                   
+/// The goal of a Constellation is to instantiate a large number of files, potentially across file
+/// systems, and to provide a very light-weight interface for accessing those files: open for
+/// (read|write).
 ///
-/// Interactions with the layout, after creation, are limited to `open_for_reading` and
-/// `open_for_writing` to a specified _absolute_ file identification number.
+/// Interactions with the layout, after creation, are limited to individual files and some
+/// inspection with respect to the dimension of the constellation.
 ///
 /// # Constellation Structure
 ///
-/// A constellation will a structure similar to the following:
+/// A constellation structure is composed of _roots_, _directories_ and _files_. A _root_ is a path
+/// to a collection of _directories_. A _directory_ is a collection of _files_. Roots may span file
+/// systems. 
+///
+/// Directories and Files will have the naming scheme: <prefix><ID>.
+///
+/// Directories and files will be created, and numbered (ID), in a round-robin fashion. That is
+/// the first file will reside in the first directory, the second file in the second directory, and
+/// so on. If their are more files than directories, they will loop back (as in modular
+/// arithmetic). The directories and files are organized such that the file resides in the 
+/// directory in which its ID is congruent. 
+///
+/// An example of a constellation:
 ///
 /// ```txt
 /// FileConstellation
@@ -74,12 +87,9 @@ struct LayerInfo {
 /// Note that under the `root`s  directories and files that differ with respect to their peers only
 /// in the number. Each is composed of a `prefix` and a `number` such that we get
 /// `<prefix><number>` for each. 
-///
-/// The directories and files are organized such that the file resides
-/// in the directory in which its id is congruent. 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileConstellation {
-    /// Root path for the directories
+    /// Root path(s) for the directories
     roots: Vec<PathBuf>,
 
     /// Info about The directories under the root
@@ -88,10 +98,12 @@ pub struct FileConstellation {
     /// Info for files contained in a single directory
     files: LayerInfo,
 
-    /// Whether this structure should respect drop semantics 
+    /// Whether this structure should remove the files and directories when dropped. 
     drop: bool,
 } 
 impl FileConstellation {
+
+    /// TODO 
     pub fn new(roots: Vec<PathBuf>, 
                directories_per_root: (String, u64),
                files_per_directory: (String, u64), 
@@ -144,55 +156,80 @@ impl FileConstellation {
         unimplemented!("future feature");
     }
 
-    pub fn open(&self, absolute_id: u64, read: bool, write: bool) -> Result<File> {
-        self.open_with_checked_id(self.file_identifier(absolute_id)?, read, write)
+    /// Open a file with identifier `id` for (read|write). The `id` is the absolute identification
+    /// of the file.
+    #[inline(always)]
+    pub fn open(&self, id: u64, read: bool, write: bool) -> Result<File> {
+        self.open_with_checked_id(self.file_identifier(id)?, read, write)
     }
 
-    /// Inverts the flag that indicates whether Drop removes files from the file system.
+    /// Toggles whether Drop removes files and directories from the file system.
     pub fn toggle_drop(&mut self) { self.drop = !self.drop; }
+
+    /// Returns the dimensions of the Constellation:
+    ///     (roots, directories (per root), files (per directory))
+    #[inline(always)]
+    pub fn dimensions(&self) -> (u64, u64, u64) { 
+        (self.roots.len() as u64, self.directories.count, self.files.count)
+    }
     
-    /// Returns the total number of files contained in the constellation
-    pub fn count(&self) -> u64 { self.files.count * self.directories.count }
+    /// Returns the total number of files contained in the constellation. Convenience function,
+    /// this is the same as the product of the return values from `dimension()`.
+    #[inline(always)]
+    pub fn count(&self) -> u64 {
+        self.roots.len() as u64 * self.directories.count * self.files.count 
+    }
 
     /// Returns the size of a file(s), in bytes, contained in the constellation
+    #[inline(always)]
     pub fn size(&self) -> u64 { self.files.size.expect("files should always be declared with a size") }
 
     #[inline(always)]
-    fn file_identifier(&self, absolute_id: u64) -> Result<FileIdentifier> {
-        if (self.directories.count * self.files.count) < absolute_id {
-            Err(anyhow!("Requested file id is out of bounds: requested {} > {} max", absolute_id, self.files.count))
+    fn file_identifier(&self, id: u64) -> Result<FileIdentifier> {
+        let (roots, directories, files): (u64, u64, u64) = self.dimensions();
+
+        if (roots * directories * files) < id {
+            Err(anyhow!("Requested file id is out of bounds: requested {} > {} max", id, self.files.count))
         } else {
-            let file: u64      = absolute_id % (self.files.count * self.directories.count);
-            let directory: u64 = absolute_id % self.directories.count;
-            let root: usize    = absolute_id as usize % self.roots.len();
+            let file: u64      = id % (files * directories * roots);
+            let directory: u64 = id % (        directories * roots);
+            let root: u64      = id % (                      roots);
 
             Ok(FileIdentifier { file, directory, root })
         }
     }
 
     fn instantiate(fss: FileConstellation) -> Result<FileConstellation> {
+        let (roots, directories, files): (u64, u64, u64) = fss.dimensions();
+        let total_directories: u64 = roots * directories;
+        let total_files: u64 = total_directories * files;
+
         // Create all directories
-        (0..fss.directories.count)
+        (0..total_directories)
             .into_iter()
             .try_for_each(|d|{ fss.create_directory(fss.file_identifier(d)?) })?;
 
         // Create all files
-        (0..(fss.files.count * fss.directories.count))
+        (0..total_files)
             .into_iter()
             .try_for_each(|f|{ fss.create_file(fss.file_identifier(f)?) })?;
         Ok(fss)
     }
 
     fn destroy(&self) -> Result<(), anyhow::Error> {
+        let (roots, directories, files): (u64, u64, u64) = self.dimensions();
+        let total_directories: u64 = roots * directories;
+        let total_files: u64 = total_directories * files;
+
         // Remove all files
-        (0..(self.files.count * self.directories.count))
+        (0..total_files)
              .into_iter()
              .try_for_each(|f|{
                  self.remove_file(self.file_identifier(f)?)
              })?;
 
         // Remove all directories
-        (0..self.directories.count)
+        (0..total_directories)
             .into_iter()
             .try_for_each(|d|{
                 self.remove_directory(self.file_identifier(d)?)
@@ -221,10 +258,12 @@ impl FileConstellation {
 
     #[inline(always)]
     fn construct_path(&self, id: FileIdentifier) -> Result<PathBuf> {
-        let dwidth: usize = (self.directories.count.ilog10() + 1) as usize;
-        let fwidth: usize = ((self.directories.count * self.files.count).ilog10() + 1) as usize;
+        let (roots, directories, files): (u64, u64, u64) = self.dimensions();
 
-        let mut location: PathBuf = self.roots[id.root].clone();
+        let dwidth: usize = ((roots * directories        ).ilog10() + 1) as usize;
+        let fwidth: usize = ((roots * directories * files).ilog10() + 1) as usize;
+
+        let mut location: PathBuf = self.roots[id.root as usize].clone();
 
         let directory: String = format!("{}{:0width$}", self.directories.prefix, id.directory, width=dwidth);
         location.push(directory);
@@ -288,29 +327,30 @@ impl Drop for FileConstellation {
 impl fmt::Display for FileConstellation {
     /// TODO: Add printout for options, sizes, etc
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let dwidth: usize = (self.directories.count.ilog10() + 1) as usize;
-        let fwidth: usize = (self.files.count.ilog10() + 1) as usize;
+        let (roots, directories, files): (u64, u64, u64) = self.dimensions();
+
+        let dwidth: usize = ((roots * directories        ).ilog10() + 1) as usize;
+        let fwidth: usize = ((roots * directories * files).ilog10() + 1) as usize;
         //let root_id = id.file % self.roots.len() as u64;
 
         //write!(f, "Roots:........... {:?}\n", self.root
                                                   //.to_str()
                                                   //.expect("Undefined FileConstellation root"))?;
-        write!(f, "Roots:............")?;
+        writeln!(f, "Roots:............")?;
         self.roots.iter().try_for_each(|r| {
-            write!(f, "\t{}", r.display())
+            writeln!(f, "\t{}", r.display())
         })?;
 
-        write!(f, "Roots:............")?;
-        write!(f, "Directory Names:.. {}[{:0width$}-{:0width$}]\n", 
+        writeln!(f, "Directory Names:.. {}[{:0width$}-{:0width$}]\n", 
                     self.directories.prefix,
                     0,
-                    self.directories.count - 1,
+                    (roots * directories) - 1,
                     width = dwidth)?;
 
-        write!(f, "File Names:....... {}[{:0width$}-{:0width$}]\n", 
+        writeln!(f, "File Names:....... {}[{:0width$}-{:0width$}]\n", 
                     self.files.prefix,
                     0,
-                    self.files.count - 1,
+                    (roots * directories * files) - 1,
                     width = fwidth)?;
         Ok(())
     }
@@ -345,10 +385,12 @@ pub mod tests {
         ).expect("created directories and files");
 
         files.toggle_drop();
+        
+        let (r, d, f) = files.dimensions();
 
         // Test the number and characteristics of created files.
         let mut total_files: u64 = 0;
-        (0..(fcount*dcount))
+        (0..(r*d*f))
             .for_each(|fid| {
                 let file: File = files.open(fid, false, true)
                                       .expect("files created at constellation instantiation");
@@ -361,7 +403,7 @@ pub mod tests {
                 }
                 total_files += 1;
             });
-        assert_eq!(total_files,(fcount * dcount));
+        assert_eq!(total_files,(r*d*f));
 
         println!("{files}");
 
