@@ -33,9 +33,6 @@ humantime = "2.1.0"
 serial_test = "2.0.0"  # Runs decorated tests serially
 tempfile = "3.13.0"         # Easily create temp files
 
-# Profiling and Debugging
-perfcnt = "0.8.0"
-
 [workspace]
 members = [
     "aio-sys",
