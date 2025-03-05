@@ -223,8 +223,7 @@ pub mod work {
     ///  let first_value: u64 = random_bounded_map(0,None,upper_bound,0).unwrap();
     ///
     ///  let work = DIter::new_with_state((first_value, 0),
-    ///                                  lower_bound,
-    ///                                  upper_bound,
+    ///                                  lower_bound..upper_bound,
     ///                                  iteration_max,
     ///                                  random_bounded_map);
     ///
@@ -337,7 +336,7 @@ pub mod work {
     ///     else { None }
     /// };
     ///
-    /// let work = DIter::new_with_state((1,1), u64::MIN, u64::MAX, 1024 /*iter max*/, map);
+    /// let work = DIter::new_with_state((1,1), u64::MIN..u64::MAX, 1024 /*iter max*/, map);
     ///
     /// // Does not panic. 
     /// work.into_iter().for_each(|(c, i) | { assert!(c % 2 == 1) });
